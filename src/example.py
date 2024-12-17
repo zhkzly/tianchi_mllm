@@ -39,6 +39,7 @@ def main():
     inputs = processor(
         text=[text_prompt], images=[image], padding=True, return_tensors="pt"
     )
+    # print(inputs)
     inputs = inputs.to("cuda")
 
     # Inference: Generation of the output
