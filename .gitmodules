@@ -1,0 +1,6 @@
+[submodule "submodules/fms-fsdp"]
+	path = submodules/fms-fsdp
+	url = https://github.com/foundation-model-stack/fms-fsdp.git
+[submodule "submodules/train-with-fsdp"]
+	path = submodules/train-with-fsdp
+	url = https://github.com/abacaj/train-with-fsdp.git

@@ -1,14 +1,14 @@
 import os
 os.environ['HF_HOME']='huggingface'
-from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
-from data_utils import CustomDataset,Conversions
+from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor,Qwen2VLProcessor
+from src.utils.data_utils import CustomDataset,Conversions
 from torch.utils.data import DataLoader
 from rich import print
 import logging
 import json
 from tqdm import tqdm
 import re
-from  data_utils import convert_to_json
+from src.utils.data_utils import convert_to_json
 import math
 
 
@@ -22,6 +22,7 @@ def main(data_path='datas/train',task_type='0',data_type='train'):
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         "Qwen/Qwen2-VL-2B-Instruct", torch_dtype="auto", device_map="auto"
     )
+    print(model)
     processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct")
     
     data_set=CustomDataset(data_path=data_path,data_type=data_type,task_type=task_type)

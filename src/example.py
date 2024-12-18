@@ -6,7 +6,7 @@ from typing import Dict
 import os
 os.environ['HF_HOME']='huggingface'
 from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
-from data_utils import CustomDataset
+from utils.data_utils import CustomDataset
 from torch.utils.data import DataLoader
 
 def main():
