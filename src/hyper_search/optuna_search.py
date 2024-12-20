@@ -227,9 +227,7 @@ def objective(trial):
     return accuracy
 
 
-
-
-class HyperSearch():
+class HyperSearch:
     def __init__(self, model_args, train_args, data_args):
         self.model_args = model_args
         self.train_args = train_args
@@ -237,20 +235,6 @@ class HyperSearch():
 
     def run(self):
         pass
-    
-
-
-    
-
-
-
-
-
-
-
-
-
-
 
 
 if __name__ == "__main__":

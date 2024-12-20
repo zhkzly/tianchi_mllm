@@ -1,15 +1,18 @@
 from dataclasses import dataclass
-from typing import Dict, Sequence
+from typing import Dict, Sequence, List
 from torch.utils.data import Dataset
 import copy
 import json
 import torch
 import transformers
+from src.utils.fms_fsdp.utils.dummy_data_utils import Conversions, CustomDataset
+
 
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "<|pad|>"
-DEFAULT_EOS_TOKEN = "<|endoftext|>"
+DEFAULT_EOS_TOKEN = "<|im_end|>"
 DEFAULT_UNK_TOKEN = "<|unk|>"
+
 
 PROMPT_DICT = {
     "instruct_prompt": "[Instructions]:\n{instruction}\n\n[Response]:",
@@ -118,6 +121,110 @@ class SupervisedDataset(Dataset):
         return dict(input_ids=self.input_ids[i], labels=self.labels[i])
 
 
+class CustomSftDataset(Dataset):
+    #
+    def __init__(
+        self,
+        preprocessor,
+        data_path,
+        data_type="train",
+        task_type="intent_classification",
+    ) -> None:
+        super().__init__()
+        self.preprocessor = preprocessor
+        self.data_path = data_path
+        self.data = self._load_data()
+        self.data_type = data_type
+        self.task_type = task_type
+        self.conversion = Conversions()
+
+    def _load_data(self):
+        data_path = os.path.join(self.data_path, self.data_type + ".json")
+        with open(data_path, "r") as f:
+            self.data = json.load(f)[self.task_type]
+
+    def _helpe_genereate_prompt(self, instruction):
+        instruction = self.conversion.parse_conversation(instruction["instruction"])
+        instruction = self.preprocessor.apply_chat_template(
+            instruction, add_general_prompt=True
+        )
+        return instruction
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        images = [
+            Image.open(os.path.join(self.data_path, "images", image))
+            for image in self.data[index]["image"]
+        ]
+        outputs = deepcopy(self.data[index])
+        # print(f"outputs:{outputs}")
+        outputs["image"] = images
+        outputs["image_id"] = self.data[index]["image"]
+        # list[{},{},]
+        outputs["instruction"] = self._helpe_genereate_prompt(outputs)
+        return outputs
+
+
+# def collate_fn(batch:List[List[Dict]]):
+#     # helping organize the return of the dataset call
+#     # 需要进行批量化的padding，得到一些掩码，和ignore,构造完整的 sft instruction
+
+
+class DataSftCollator:
+    def __init__(self, preprocessor):
+        self.preprocessor = preprocessor
+        self.ignore_index = IGNORE_INDEX
+        self.split_idx = self.preprocessor.tokenizer.convert_tokens_to_ids("\\n")
+
+    def _get_full_prompts(self, instances):
+        full_prompts = [
+            [instance["instruction"] + instance["output"] + DEFAULT_EOS_TOKEN]
+            for instance in instances
+        ]
+
+    def _get_exact_number_index(lst):
+        for index, value in enumerate(reversed(lst), target_number=self.split_idx):
+            if value == self.split_idx:
+                # len(lst) - 1 - index 是为了计算原始列表中的索引位置
+                last_index = len(lst) - 1 - index
+                break
+            else:
+                last_index = None  # 如果没有找到，则设置为 None 或其他默认值
+
+    def _get_response_start_idx(self, instances):
+        response_index_list = [
+            self._get_exact_number_index(instance["input_ids"].tolist(), self.split_idx)
+            for instance in instances
+        ]
+        return response_index_list
+
+    def _get_labels(self, input_ids, response_index_list):
+        labels = []
+        input_length = input_ids.shape[1]
+        for ignore_length, input_id in zip(response_index_list, input_ids):
+            ignore_index = torch.zeros_like(input_ids[0], dtype=torch.long)
+            ignore_index[:ignore_length] = self.ignore_index
+            label = torch.where(
+                ignore_index == self.ignore_index, ignore_index, input_id
+            )
+            labels.append(label)
+        return torch.stack(labels, dim=0)
+
+    def __call__(self, instances: List[Dict]) -> Dict[str, torch.Tensor]:
+        # 将 response和instruction进行拼接获取一个完整的text list,获取一个完整的image list
+        #  之后进行preprocessor ，得到模型的输入
+        full_prompts = self._get_full_prompts(instances)
+        inputs_features_dict = self.preprocessor(
+            text=full_prompts, images=instances, return_tensors="pt"
+        )
+        response_index_list = self._get_response_start_idx(instances)
+        input_ids = inputs_features_dict["input_ids"]
+        labels = self._get_labels(input_ids)
+        return inputs_features_dict, labels
+
+
 @dataclass
 class DataCollatorForSupervisedDataset(object):
     """Collate examples for supervised fine-tuning."""
@@ -140,7 +247,3 @@ class DataCollatorForSupervisedDataset(object):
             labels=labels,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
-
-
-def get_dummy_dataset(data_args):
-    pass

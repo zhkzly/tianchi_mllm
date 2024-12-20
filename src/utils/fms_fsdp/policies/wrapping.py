@@ -3,7 +3,7 @@ import functools
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy,size_based_auto_wrap_policy
 
 
-def get_wrapper(cfg,block):
+def get_wrapper(cfg,block=None):
     if cfg.wrapper_type == "size_based":
         auto_wrap_policy = functools.partial(
             size_based_auto_wrap_policy,

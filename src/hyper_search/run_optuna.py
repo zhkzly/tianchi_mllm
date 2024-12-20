@@ -19,6 +19,7 @@ from src.utils.fms_fsdp.utils.train_utils import (
     setup_environ_flags,
     train,
     get_wrap_block,
+    validate_fn,
 )
 from src.utils.utils import get_model
 from src.utils.fms_fsdp.configs.configs import ModelArgs, TrainArgs, PeftArgs, DataArgs
@@ -33,7 +34,7 @@ from src.utils.utils import get_optimizer, get_scheduler
 from tqdm import tqdm
 
 
-def main(
+def optuna_main(
     train_args: TrainArgs,
     model_args: ModelArgs,
     data_args: DataArgs,
@@ -142,7 +143,7 @@ def main(
         use_orig_params=train_args.use_torch_compile,
         device_id=torch.cuda.current_device(),
         limit_all_gathers=True,
-        param_init_fn=param_init_fn,
+        # param_init_fn=param_init_fn,
     )
     # we need this post-fsdp call to avoid graph break with torch.compile, until we figure out a better solution.
     # model.rot_emb.compute_freqs_cis(
@@ -247,9 +248,15 @@ def main(
         )
 
     checkpointer.save_single_file(train_args.num_steps, model)
-
     dist.barrier()
-    dist.destroy_process_group()
+    validate_loss = validate_fn(
+        model,
+        val_loader=val_loader,
+        local_rank=local_rank,
+        rank=rank,
+        tracker_fn=tracker_fn,
+    )
+    return validate_loss
 
 
 if __name__ == "__main__":

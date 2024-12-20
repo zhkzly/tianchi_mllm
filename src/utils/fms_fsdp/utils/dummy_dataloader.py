@@ -11,9 +11,6 @@ import math
 import transformers
 
 
-
-
-
 def estimate_mfu(params, config, fwdbwd_per_iter, block_size, dt):
     """estimate model flops utilization (MFU) in units of 3090 bfloat16 peak FLOPS"""
     # first estimate the number of flops we do per iteration.
@@ -70,6 +67,7 @@ def get_dataloaders(
     seed,
     collator,
     batch_size,
+    num_workers,
 ):
     train_sampler = DistributedSampler(
         train_dataset,
@@ -87,6 +85,7 @@ def get_dataloaders(
         batch_size=batch_size,
         collate_fn=collator,
         sampler=train_sampler,
+        num_workers=num_workers,
     )
 
     val_sampler = DistributedSampler(
@@ -105,6 +104,7 @@ def get_dataloaders(
         batch_size=batch_size,
         collate_fn=collator,
         sampler=val_sampler,
+        num_workers=num_workers,
     )
 
     return train_sampler, train_loader, val_loader
