@@ -25,6 +25,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+MODEL_OUTPUT_CONFIG = {
+    "use_cache": False,
+    "return_dict": True,
+    "output_hidden_states": False,
+    "output_attentions": False,
+}
+
+
+def merge_dict(dict1, dict2):
+    output = {**dict1, **dict2}
+    return output
+
 
 def get_profiler():
     return torch.profiler.profile(
@@ -46,6 +58,8 @@ def main(data_path="datas/train", task_type="0", data_type="train"):
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         "Qwen/Qwen2-VL-2B-Instruct", torch_dtype="auto", device_map="auto"
     )
+    for name, param in model.named_parameters():
+        print(f"Parameter {name} has dtype: {param.dtype}")
     print(f"the device of model:{model.device}")
     # Qwen2VLForConditionalGeneration
     logger.info(f"the type of model:{type(model)}")
@@ -113,72 +127,29 @@ def main(data_path="datas/train", task_type="0", data_type="train"):
     raw_output_texts = []
 
     profiler = get_profiler()
+    with torch.no_grad():
+        for text_prompt, image in tqdm(
+            zip(text_prompt, datas["image"]), total=len(text_prompt), desc="inference"
+        ):
+            inputs = processor(
+                text=[text_prompt], images=[image], padding=True, return_tensors="pt"
+            )
+            inputs = inputs.to("cuda")
+            # Inference: Generation of the output
+            input_dict = merge_dict(inputs, MODEL_OUTPUT_CONFIG)
+            output_ids = model(labels=inputs.input_ids, **input_dict)
 
-    for text_prompt, image in tqdm(
-        zip(text_prompt, datas["image"]), total=len(text_prompt), desc="inference"
-    ):
-        inputs = processor(
-            text=[text_prompt], images=[image], padding=True, return_tensors="pt"
-        )
-        inputs = inputs.to("cuda")
-        # Inference: Generation of the output
-        output_ids = model.generate(**inputs, max_new_tokens=128)
-        generated_ids = [
-            output_ids[len(input_ids) :]
-            for input_ids, output_ids in zip(inputs.input_ids, output_ids)
-        ]
-        output_text = processor.batch_decode(
-            generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
-        )
-        # 需要总的任务进行分别观察
-        # print(f"the output_text:{output_text}")
-        output_text = [re.sub("'", '"', text) for text in output_text]
-        raw_output_texts.append(output_text)
-        # print(f"the raw_output_text:{raw_output_texts[-1]}")
-        # print(f"the type of output_text:{(output_text[0])}")
-        # logger.info(f"the output_text:{output_text}")
-        processed_output_texts.append(convert_to_json(output_text[0]))
-        profiler.step()
-    positive_pred = [
-        1
-        for pred, label in zip(processed_output_texts, datas["output"])
-        if pred[0] == label
-    ]
-    print(f"positive_pred_tasks_{task_type}:{len(positive_pred)}")
-    print(f"output_texts_tasks_{task_type}:{len(processed_output_texts)}")
-    print(
-        f"evaluation score_tasks_{task_type}:{len(positive_pred)/len(processed_output_texts)}"
-    )
-    print(f"saving the prediction results_tasks_{task_type}")
-    task = "图片分类" if task_type == "0" else "意图分类"
-    saving_results = {
-        "task": task,
-        "total_num": len(datas["instruction"]),
-        "positive_pred": len(positive_pred),
-        "score": len(positive_pred) / len(processed_output_texts),
-    }
-    saving_results["id_label_pred_raw_image"] = [
-        [id, label, pred[0], raw, image_id]
-        for id, label, pred, raw, image_id in zip(
-            datas["id"],
-            datas["output"],
-            processed_output_texts,
-            raw_output_texts,
-            datas["image_id"],
-        )
-    ]
-
-    with open(
-        os.path.join("datas/train", f"{data_type}_task_" + task_type + "_results.json"),
-        "w",
-    ) as f:
-        json.dump(saving_results, f, ensure_ascii=False)
-    print(f"prediction results saved")
+            print("++++++++++++++++++++++++++++++")
+            print(f"the type of output_ids:{type(output_ids)}")
+            loss = output_ids.loss if hasattr(output_ids, "loss") else output_ids
+            print(f"the loss:{loss}")
+            print(f"the type of loss:{type(loss)}")
+            print("+++++++++++++++++++++++++++++")
 
 
 if __name__ == "__main__":
     data_path = "datas/train"
     task_type = "1"
-    data_type = "train"
+    data_type = "val"
     for task_type in ["1", "1"]:
         main(data_path=data_path, task_type=task_type, data_type=data_type)

@@ -4,12 +4,20 @@ import time
 from pathlib import Path
 
 import torch
-from torch.distributed._shard.checkpoint import (
+from torch.distributed.checkpoint import (
     FileSystemReader,
     FileSystemWriter,
     load,
     save,
+    load_sharded_optimizer_state_dict,
 )
+
+# from torch.distributed._shard.checkpoint import (
+#     FileSystemReader,
+#     FileSystemWriter,
+#     load,
+#     save,
+# )
 from torch.distributed.checkpoint.default_planner import (
     DefaultLoadPlanner,
     DefaultSavePlanner,
@@ -62,6 +70,11 @@ def get_oldest(targdir, qualifier=lambda x: True, key=os.path.getctime):
     return None
 
 
+# 该类主要是用来加载和保存模型的参数的，包括单个文件和分片文件。
+# 单个文件就是指模型的参数全部保存在一个文件中，而分片文件就是指模型的参数被分片保存在多个文件中。
+# 单个文件加载和保存的过程比较简单，而分片文件加载和保存的过程则需要使用到torch.distributed._shard.checkpoint模块。
+# 该模块提供了两个类FileSystemReader和FileSystemWriter，用于读取和写入分片文件。
+# 该模块还提供了两个函数load和save，用于加载和保存模型的参数。
 class Checkpointer:
     """
     Manages the checkpoint directory. Saves new checkpoints and deletes old ones after the specified number are written.

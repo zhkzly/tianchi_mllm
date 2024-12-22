@@ -1,7 +1,5 @@
 # user zhengkelong
 
-from modified_model.models import Model
-from modified_model.utils.data import MyDataset, Data
 
 from torch.utils.data import DataLoader
 import numpy as np
@@ -16,14 +14,21 @@ import logging
 from tqdm import tqdm
 from dataclasses import dataclass, field
 from transformers import HfArgumentParser
+from src.hyper_search.configs import (
+    ModelArgs,
+    TrainArgs,
+    PeftArgs,
+    DataArgs,
+    OptunaArgs,
+)
 from typing import Optional, List
 from torch.utils.tensorboard import SummaryWriter
 import math
-from modified_model.utils.helper import get_optimizer, get_scheduler
+from src.utils.utils import get_optimizer, get_scheduler
 
 from safetensors import safe_open
 from safetensors.torch import save_file
-from src.hyper_search.run_optuna import optuna_main
+from src.hyper_search.optuna_helper import optuna_main
 import torch.distributed as dist
 
 
@@ -54,39 +59,66 @@ class OptunaFSDP:
         self._set_up_optuna()
 
     def _set_up_optuna(self):
+        # 默认将所有的都加入到一个组中，否则就需要自己确定，或者分配，cpu 通信
         self.optuna_group = dist.new_group(backend="gloo")
 
     def objective(self, trial):
         # 训练相关的，学习率，drop_out,epochs,optimizer,
         trial = TorchDistributedTrial(trial, group=self.optuna_group)
 
-        train_args.lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
-        train_args.epochs = trial.suggest_int("epochs", 1, 50, step=10)
-        train_args.optimizer = trial.suggest_categorical(
+        self.train_args.lr = trial.suggest_float(
+            "lr",
+            self.optuna_args.search_lr_min,
+            self.optuna_args.search_lr_max,
+            log=True,
+        )
+        self.train_args.epochs = trial.suggest_int(
+            "epochs", 1, self.optuna_args.epochs_max
+        )
+        self.train_args.optimizer = trial.suggest_categorical(
             "optimizer", ["adam", "adamw", "sgd"]
         )
 
-        train_args.lr_scheduler = trial.suggest_categorical(
-            "lr_scheduler", ["cosine", "step"]
+        self.train_args.lr_scheduler = trial.suggest_categorical(
+            "lr_scheduler", ["cosine", "step", "cosine_with_warmup"]
+        )
+        self.train_args.batch_size = trial.suggest_int("batch_size", 2, 8, step=2)
+        self.peft_args.low_rank = trial.suggest_int(
+            "low_rank",
+            self.optuna_args.low_rank_min,
+            self.optuna_args.low_rank_max,
+            self.optuna_args.low_rank_step,
+        )
+        self.peft_args.lora_alpha = trial.suggest_int(
+            "low_rank_alpha",
+            self.optuna_args.search_lora_alpha_min,
+            self.optuna_args.search_lora_alpha_max,
+            self.optuna_args.search_lora_alpha_step,
         )
         if self.rank == 0:
             print(f"config hyper_params")
+        val_loss = optuna_main(
+            self.train_args, self.model_args, self.data_args, self.peft_args, trial
+        )
 
-        val_loss = optuna_main(train_args, data_args, model_args, peft_args)
-
-        trial.report(val_loss, step=epoch)
-        if trial.should_prune():
-            raise optuna.exceptions.TrialPruned()
         return val_loss
 
     def search(self):
         if self.rank == 0:
             storge = self.optuna_args.storage
-            sampler = TPESampler(seed=self.optuna_args.seed)
+            sampler = TPESampler(seed=self.optuna_args.optuna_seed)
             self.study = optuna.create_study(
-                direction="minimize", sampler=sampler, storage=storge
+                direction=optuna_args.direction,
+                study_name=self.optuna_args.study_name,
+                sampler=sampler,
+                storage=storge,
+                load_if_exists=optuna_args.load_if_exists,
             )
-            self.study.optimize(self.objective, n_trials=self.optuna_args.n_trials)
+            self.study.optimize(
+                self.objective,
+                n_trials=self.optuna_args.n_trials,
+                n_jobs=optuna_args.n_jobs,
+            )
             prued = self.study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
             complete = self.study.get_trials(
                 deepcopy=False, states=[TrialState.COMPLETE]
@@ -101,7 +133,6 @@ class OptunaFSDP:
             print("  Params: ")
             for key, value in trial.params.items():
                 print(f"    {key}: {value}")
-            dist.destroy_process_group(self.optuna_group)
 
         else:
             for _ in range(self.optuna_args.n_trials):
@@ -109,6 +140,8 @@ class OptunaFSDP:
                     self.objective(None)
                 except optuna.exceptions.TrialPruned:
                     pass
+        if rank == 0:
+            print("finish search")
         dist.barrier()
         dist.barrier(self.optuna_group)
         dist.destroy_process_group(self.optuna_group)
@@ -116,7 +149,20 @@ class OptunaFSDP:
 
 
 if __name__ == "__main__":
-    dist.init_process_group()
+    # with torch.device('meta')
+    dist.init_process_group(backend="nccl")
+    (
+        train_args,
+        data_args,
+        peft_args,
+        optuna_args,
+        model_args,
+    ) = HfArgumentParser(
+        (TrainArgs, DataArgs, PeftArgs, OptunaArgs, ModelArgs)
+    ).parse_args_into_dataclasses()
+    rank = dist.get_rank()
+    # export WANDB_API_KEY="########################"
+
     optuna_fsdp = OptunaFSDP(
         model_args, train_args, data_args, peft_args, optuna_args, rank
     )

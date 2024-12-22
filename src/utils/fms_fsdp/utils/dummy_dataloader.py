@@ -69,6 +69,8 @@ def get_dataloaders(
     batch_size,
     num_workers,
 ):
+    # print(f"the type of train_dataset is {type(train_dataset)}")
+    # print(f"the length of train_dataset is {len(train_dataset)}")
     train_sampler = DistributedSampler(
         train_dataset,
         num_replicas=world_size,
@@ -79,7 +81,7 @@ def get_dataloaders(
 
     train_loader = DataLoader(
         train_dataset,
-        shuffle=False,
+        shuffle=not shuffle,
         pin_memory=True,
         drop_last=True,
         batch_size=batch_size,
@@ -98,7 +100,7 @@ def get_dataloaders(
 
     val_loader = DataLoader(
         val_dataset,
-        shuffle=False,
+        shuffle=not shuffle,
         pin_memory=True,
         drop_last=True,
         batch_size=batch_size,

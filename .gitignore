@@ -176,6 +176,11 @@ cython_debug/
 /huggingface/*
 !/huggingface/.gitkeep
 
+/logs/*
+!/logs/.gitkeep
+
+
+
 
 
 

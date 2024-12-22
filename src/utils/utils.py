@@ -4,8 +4,12 @@ import math
 import logging
 import bitsandbytes as bnb
 
-logger=logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s - %(lineno)s')
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s - %(lineno)s",
+)
+from transformers import Qwen2VLForConditionalGeneration
 
 
 def get_pred_index(pred_logits):
@@ -15,9 +19,27 @@ def get_pred_index(pred_logits):
 
 def get_optimizer(model, train_args):
     if train_args.optimizer == "adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=train_args.lr)
-        optimizer.param_groups
+        weight_decay = train_args.weight_decay if train_args.weight_decay else 0
+        # 0.9,0.95
+        betas = (
+            (train_args.beta1, train_args.beta2)
+            if train_args.beta1 and train_args.beta2
+            else (0.9, 0.999)
+        )
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=train_args.lr, weight_decay=weight_decay, betas=betas
+        )
     elif train_args.optimizer == "adamw":
+        weight_decay = train_args.weight_decay if train_args.weight_decay else 0
+        # 0.9,0.95
+        betas = (
+            (train_args.beta1, train_args.beta2)
+            if train_args.beta1 and train_args.beta2
+            else (0.9, 0.999)
+        )
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=train_args.lr, weight_decay=weight_decay, betas=betas
+        )
         optimizer = torch.optim.AdamW(model.parameters(), lr=train_args.lr)
     elif train_args.optimizer == "adamw8bit":
         # 需要 pip install bitsandbytes,
@@ -42,6 +64,7 @@ class Scheduler:
         self.steps = 0
         self.optimizer = optimizer
         self.lrs = [param_group["lr"] for param_group in optimizer.param_groups]
+        self.last_lr = None
 
     def get_lr(self):
         lrs = []
@@ -53,6 +76,7 @@ class Scheduler:
                     self.steps * (lr - lr_min) / self.train_args.warmup_steps + lr_min
                     for lr in self.lrs
                 ]
+                self.last_lr = lrs
                 return lrs
             elif self.train_args.scheduler == "cosine":
                 # 余弦退火
@@ -70,6 +94,7 @@ class Scheduler:
                     )
                     for lr in self.lrs
                 ]
+                self.last_lr = lrs
             elif self.train_args.scheduler == "linear":
                 # 线性衰减
                 lrs = [
@@ -79,6 +104,7 @@ class Scheduler:
                     / (self.train_args.max_steps - self.train_args.warmup_steps)
                     for lr in self.lrs
                 ]
+                self.last_lr = lrs
             else:
                 raise ValueError("scheduler not supported")
 
@@ -99,6 +125,7 @@ class Scheduler:
                 )
                 for lr in self.lrs
             ]
+            self.last_lr = lrs
         elif self.train_args.scheduler == "linear":
             # 线性衰减
             lrs = [
@@ -108,6 +135,7 @@ class Scheduler:
                 / (self.train_args.max_steps - self.train_args.warmup_steps)
                 for lr in self.lrs
             ]
+            self.last_lr = lrs
         else:
             raise ValueError("scheduler not supported")
 
@@ -123,6 +151,9 @@ class Scheduler:
         self.steps = 0
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lrs[i]
+
+    def get_last_lr(self):
+        return self.lrs
 
 
 # from torch.optim.lr_scheduler import LambdaLR, StepLR, MultiStepLR, ExponentialLR, CosineAnnealingLR, ReduceLROnPlateau, CyclicLR, CosineAnnealingWarmRestarts
@@ -205,30 +236,12 @@ class Evaluate:
 
         pass
 
-def get_model(train_args):
-    pass
-    
-    
-    
-    
-    
-    
-    
-    
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def get_model(model_args):
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
+        model_args.model_name,
+        torch_dtype=torch.float32,
+        device_map="cpu",
+        cache_dir=model_args.cache_dir,
+    )
+    return model

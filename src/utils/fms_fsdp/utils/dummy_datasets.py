@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 from typing import Dict, Sequence, List
 from torch.utils.data import Dataset
-import copy
+from copy import deepcopy
 import json
 import torch
 import transformers
 from src.utils.fms_fsdp.utils.dummy_data_utils import Conversions, CustomDataset
-
+import os
+from PIL import Image
 
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "<|pad|>"
@@ -128,22 +129,24 @@ class CustomSftDataset(Dataset):
         preprocessor,
         data_path,
         data_type="train",
-        task_type="intent_classification",
+        task_type="all",
     ) -> None:
         super().__init__()
         self.preprocessor = preprocessor
         self.data_path = data_path
-        self.data = self._load_data()
         self.data_type = data_type
         self.task_type = task_type
         self.conversion = Conversions()
+        self._load_data()
 
     def _load_data(self):
         data_path = os.path.join(self.data_path, self.data_type + ".json")
         with open(data_path, "r") as f:
             self.data = json.load(f)[self.task_type]
+            if self.data is None:
+                print(f"loading {self.data_type} data failed...")
 
-    def _helpe_genereate_prompt(self, instruction):
+    def _help_genereate_prompt(self, instruction):
         instruction = self.conversion.parse_conversation(instruction["instruction"])
         instruction = self.preprocessor.apply_chat_template(
             instruction, add_general_prompt=True
@@ -163,7 +166,7 @@ class CustomSftDataset(Dataset):
         outputs["image"] = images
         outputs["image_id"] = self.data[index]["image"]
         # list[{},{},]
-        outputs["instruction"] = self._helpe_genereate_prompt(outputs)
+        outputs["instruction"] = self._help_genereate_prompt(outputs)
         return outputs
 
 
@@ -177,15 +180,17 @@ class DataSftCollator:
         self.preprocessor = preprocessor
         self.ignore_index = IGNORE_INDEX
         self.split_idx = self.preprocessor.tokenizer.convert_tokens_to_ids("\\n")
+        self.pre_processor_kwargs = {"text_kwargs": {"padding": True}}
 
     def _get_full_prompts(self, instances):
         full_prompts = [
-            [instance["instruction"] + instance["output"] + DEFAULT_EOS_TOKEN]
+            instance["instruction"] + instance["output"] + DEFAULT_EOS_TOKEN
             for instance in instances
         ]
+        return full_prompts
 
-    def _get_exact_number_index(lst):
-        for index, value in enumerate(reversed(lst), target_number=self.split_idx):
+    def _get_exact_number_index(self, lst):
+        for index, value in enumerate(reversed(lst)):
             if value == self.split_idx:
                 # len(lst) - 1 - index 是为了计算原始列表中的索引位置
                 last_index = len(lst) - 1 - index
@@ -195,8 +200,8 @@ class DataSftCollator:
 
     def _get_response_start_idx(self, instances):
         response_index_list = [
-            self._get_exact_number_index(instance["input_ids"].tolist(), self.split_idx)
-            for instance in instances
+            self._get_exact_number_index(instance)
+            for instance in instances["input_ids"].tolist()
         ]
         return response_index_list
 
@@ -216,12 +221,26 @@ class DataSftCollator:
         # 将 response和instruction进行拼接获取一个完整的text list,获取一个完整的image list
         #  之后进行preprocessor ，得到模型的输入
         full_prompts = self._get_full_prompts(instances)
+        images = [instance["image"] for instance in instances]
         inputs_features_dict = self.preprocessor(
-            text=full_prompts, images=instances, return_tensors="pt"
+            text=full_prompts,
+            images=images,
+            return_tensors="pt",
+            **self.pre_processor_kwargs,
         )
-        response_index_list = self._get_response_start_idx(instances)
+        # print("##############################")
+        # print(f"the type of inputs_features_dict:{type(inputs_features_dict)}")
+        # print(f"the keys of inputs_features_dict:{inputs_features_dict.keys()}")
+        # print(f"the type of input_ids:{type(inputs_features_dict['input_ids'])}")
+        # print(f"the shape of input_ids:{inputs_features_dict['input_ids'].shape}")
+        # print(f"to_list of input_ids:{inputs_features_dict['input_ids'].tolist()}")
+        # print("##############################")
+        response_index_list = self._get_response_start_idx(inputs_features_dict)
+
         input_ids = inputs_features_dict["input_ids"]
-        labels = self._get_labels(input_ids)
+        labels = self._get_labels(input_ids, response_index_list=response_index_list)
+        # print(f"the shape of input_ids:{input_ids.shape}")
+        # print(f"the shape of labels:{labels.shape}")
         return inputs_features_dict, labels
 
 
@@ -247,3 +266,46 @@ class DataCollatorForSupervisedDataset(object):
             labels=labels,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
+
+
+if __name__ == "__main__":
+    from transformers import AutoProcessor, AutoTokenizer
+    from dataclasses import dataclass
+
+    @dataclass
+    class ModelArgs:
+        model_name: str = "Qwen/Qwen2-VL-2B-Instruct"
+        cache_dir = "./huggingface/hub"
+
+    model_args = ModelArgs()
+    preprocessor = AutoProcessor.from_pretrained(model_args.model_name)
+    train_dataset = CustomSftDataset(
+        preprocessor=preprocessor,
+        data_path="./datas/train",
+        data_type="val",
+        task_type="all",
+    )
+    data_collator = DataSftCollator(preprocessor=preprocessor)
+    from torch.utils.data import DataLoader
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=2,
+        collate_fn=collator,
+    )
+
+    model.train()
+
+    start = time.time()
+    loop_start = time.time()
+    train_loss = -1
+
+    # 指定了一个开始的节点
+    for batch_idx, (input, label) in enumerate(train_loader, start=start_step + 1):
+        if batch_idx > train_args.max_steps:
+            break
+        input = input.to(local_rank)
+        label = label.to(local_rank)
+        input_dict = merge_dict(MODEL_OUTPUT_CONFIG, input)
+
+        output = model(labels=label, **input_dict)

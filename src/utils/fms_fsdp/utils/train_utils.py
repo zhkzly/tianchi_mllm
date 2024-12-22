@@ -15,7 +15,22 @@ import torch.cuda.nccl as nccl
 import torch.distributed as dist
 from torch.distributed.fsdp import ShardingStrategy
 
-from fms_fsdp.policies import *
+from src.utils.fms_fsdp.policies import *
+from torch.amp import GradScaler
+from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
+
+MODEL_OUTPUT_CONFIG = {
+    "use_cache": False,
+    "return_dict": True,
+    "output_hidden_states": False,
+    "output_attentions": False,
+    "output_attentions": False,
+}
+
+
+def merge_dict(dict1, dict2):
+    output = {**dict1, **dict2}
+    return output
 
 
 def train(
@@ -24,43 +39,113 @@ def train(
     local_rank,
     rank,
     train_loader,
-    val_loader,
     optimizer,
     scheduler,
     profiler,
     checkpointer,
-    start_step,
-    tokens_seen,
     train_sampler,
     epoch,
-    tracker_fn,
+    start_step=0,
+    trial=None,
 ):
-    train_sampler.set_epoch(epoch)
+    if train_args.tracker:
+        if train_args.tracker not in ["wandb", "aim"]:
+            raise ValueError(f"tracker {train_args.tracker} not supported.")
+        tracker_dir = train_args.tracker_dir
+        project_name = train_args.tracker_project_name
+        run_id = f"{trial.number}" if trial else None
 
+        if train_args.tracker == "wandb":
+            try:
+                import wandb  # type: ignore
+            except ImportError:
+                raise ImportError("tracker is set to wandb but wandb is not installed.")
+            if rank == 0:
+                print(f"--> wandb is enabled!")
+                try:
+                    wandb.init(
+                        project=project_name,
+                        dir=tracker_dir,
+                        resume="allow",
+                        id=run_id,
+                        mode="offline",
+                    )
+                except wandb.errors.UsageError:
+                    raise ValueError(
+                        "wandb failed to init, did you pass your wandb api key via WANDB_API_KEY?"
+                    )
+                wandb.config = asdict(train_args)
+
+        if train_args.tracker == "aim":
+            try:
+                from aim import Run  # type: ignore
+            except ImportError:
+                raise ImportError("tracker is set to aim but aim is not installed.")
+            if rank == 0:
+                print(f"--> aim is enabled!")
+                run = Run(
+                    experiment=project_name,
+                    repo=tracker_dir,
+                    run_hash=run_id,
+                )
+                run["hparams"] = asdict(train_args)
+
+    train_sampler.set_epoch(epoch)
+    dist.barrier()
     model.train()
     ddp_stats = torch.zeros(3).to(local_rank)
 
     start = time.time()
     loop_start = time.time()
     train_loss = -1
+    # 混合精度
+    if train_args.mixed_precision:
+        scaler = ShardedGradScaler()
+        autocast = torch.amp.autocast(
+            device_type="cuda", enabled=train_args.mixed_precision
+        )
+    else:
+        scaler = None
+
     # 指定了一个开始的节点
     for batch_idx, (input, label) in enumerate(train_loader, start=start_step + 1):
-        if batch_idx > train_args.num_steps:
+        if batch_idx > train_args.max_steps:
             break
         input = input.to(local_rank)
         label = label.to(local_rank)
-
+        input_dict = merge_dict(MODEL_OUTPUT_CONFIG, input)
         optimizer.zero_grad()
-        output = model(input)
-        output = output.logits if hasattr(output, "logits") else output
-        ce_loss = torch.nn.CrossEntropyLoss()
-        # 局部的损失，全局的梯度
-        loss = ce_loss(output.view(-1, output.size(-1)), label.view(-1).long())
+        if train_args.mixed_precision:
+            with autocast:
+                output = model(labels=label, **input_dict)
+        else:
+            output = model(labels=label, **input_dict)
 
-        loss.backward()
-        ddp_stats[1] += model.clip_grad_norm_(train_args.grad_clip_thresh).item()
-        optimizer.step()
-        scheduler.step()
+        loss = (
+            output.loss / train_args.accumulation_steps
+            if hasattr(output, "loss")
+            else output
+        )
+
+        if train_args.mixed_precision:
+            scaler.scale(loss).backward()
+
+            if (batch_idx + 1) % train_args.accumulation_steps == 0:
+                if train_args.clip_grad_norm:
+                    (
+                        ddp_stats[1]
+                        + model.clip_grad_norm_(train_args.grad_clip_thresh).item()
+                    )
+                scaler.step(optimizer)
+                scaler.update()
+                scheduler.step()
+        else:
+            loss.backward()
+            if (batch_idx + 1) % train_args.accumulation_steps == 0:
+                if train_args.clip_grad_norm:
+                    ddp_stats[1] += model.clip_grad_norm_(train_args.grad_clip_thresh)
+                optimizer.step()
+                scheduler.step()
 
         ddp_stats[0] += loss.item()
         ddp_stats[2] += 1
@@ -71,16 +156,14 @@ def train(
         if batch_idx % train_args.report_interval == 0:
             # 等价与 all_gather+ reduceOp.SUM,all_gather,是得到所有的结果，
             dist.all_reduce(ddp_stats, op=dist.ReduceOp.SUM)
-            train_loss = ddp_stats[0] / ddp_stats[2]
+            train_loss = train_args.accumulation_steps * ddp_stats[0] / ddp_stats[2]
             g_norm = ddp_stats[1] / ddp_stats[2]
             elapsed_time = time.time() - loop_start
             world_size = int(os.environ["WORLD_SIZE"])
-            new_tokens_seen = (
-                (batch_idx - start_step)
-                * world_size
-                * train_args.batch_size
-                * train_args.seq_length
-            )
+            # # 实际上不是token,因为每个的sequence 长度无法确定
+            # new_tokens_seen = (
+            #     (batch_idx - start_step) * world_size * train_args.batch_size
+            # )
             if rank == 0:
                 total_tokens_seen = tokens_seen + new_tokens_seen
                 current_loss = train_loss.item()
@@ -88,45 +171,47 @@ def train(
                 current_gnorm = g_norm.item()
                 current_step_time = (time.time() - start) / train_args.report_interval
                 overall_step_time = elapsed_time / (batch_idx - start_step)
-                current_throughput = int(
-                    train_args.batch_size * train_args.seq_length / current_step_time
-                )
-                overall_throughput = int(
-                    train_args.batch_size * train_args.seq_length / overall_step_time
-                )
+                # current_throughput = int(
+                #     train_args.batch_size * train_args.seq_length / current_step_time
+                # )
+                # overall_throughput = int(
+                #     train_args.batch_size * train_args.seq_length / overall_step_time
+                # )
                 reserved_mem = torch.cuda.max_memory_reserved(
                     device=torch.cuda.current_device()
                 )
                 allocated_mem = torch.cuda.max_memory_allocated(
                     device=torch.cuda.current_device()
                 )
+                # trial.report(current_loss, batch_idx)
 
                 print("step:", batch_idx)
                 print("loss:", current_loss)
                 print("LR:", current_lr)
-                print("tokens seen:", total_tokens_seen)
+                # print("tokens seen:", total_tokens_seen)
                 print("gradient norm:", current_gnorm)
                 print("reserved memory:", reserved_mem)
                 print("allocated memory:", allocated_mem)
-                print("current step time:", current_step_time)
-                print("overall step time:", overall_step_time)
-                print("current token per gpu per sec:", current_throughput)
-                print("overall token per gpu per sec:", overall_throughput)
-                print(
-                    "overall token per day:",
-                    int(new_tokens_seen / elapsed_time * 3600 * 24),
-                )
+                # print("current step time:", current_step_time)
+                # print("overall step time:", overall_step_time)
+                # print("current token per gpu per sec:", current_throughput)
+                # print("overall token per gpu per sec:", overall_throughput)
+                # print(
+                #     "overall token per day:",
+                #     int(new_tokens_seen / elapsed_time * 3600 * 24),
+                # )
                 if train_args.tracker:
                     vals_to_track = {
                         "learning rate": current_lr,
                         "loss": current_loss,
                         "gradient norm": current_gnorm,
-                        "token seen": total_tokens_seen,
-                        "current throughput (token per gpu per sec)": current_throughput,
-                        "overall throughput (token per gpu per sec)": overall_throughput,
                         "gpu reserved memory": reserved_mem,
                         "gpu allocated memory": allocated_mem,
                     }
+                    if train_args.tracker == "wandb":
+                        tracker_fn = wandb.log
+                    elif train_args.tracker == "aim":
+                        tracker_fn = run.track
                     tracker_fn(vals_to_track, step=batch_idx)
 
             start = time.time()
@@ -135,33 +220,31 @@ def train(
 
         if batch_idx % train_args.checkpoint_interval == 0:
             checkpointer.save(
-                batch_idx,
-                model,
-                optimizer,
-                None,
-                tokens_seen=tokens_seen + new_tokens_seen,
+                model=model,
+                optimizer=optimizer,
+                step=trial.number,
             )
 
-    return train_loss
+    return train_loss, tracker_fn
 
 
 def validate_fn(model, val_loader, epoch, train_args, rank, local_rank, tracker_fn):
     if rank == 0:
         print(f"Validating at epoch {epoch}...")
+    autocast = torch.amp.autocast(
+        device_type="cuda", enabled=train_args.mixed_precision
+    )
+
     with torch.no_grad():
         model.eval()
         val_stats = torch.zeros(2).to(local_rank)
         for val_batch_idx, (val_input, val_label) in enumerate(val_loader):
             val_input = val_input.to(local_rank)
             val_label = val_label.to(local_rank)
-            val_output = model(val_input)
-            val_output = (
-                val_output.logits if hasattr(val_output, "logits") else val_output
-            )
-            val_loss = torch.nn.CrossEntropyLoss()(
-                val_output.view(-1, val_output.size(-1)),
-                val_label.view(-1).long(),
-            )
+            val_input_dict = merge_dict(MODEL_OUTPUT_CONFIG, val_input)
+            with autocast:
+                val_output = model(labels=val_label, **val_input)
+            val_output = val_output.loss if hasattr(val_output, "loss") else val_output
             val_stats[0] += val_loss.item()
             val_stats[1] += val_input.shape[0]
         dist.reduce(val_stats, dst=0, op=dist.ReduceOp.SUM)
@@ -170,8 +253,6 @@ def validate_fn(model, val_loader, epoch, train_args, rank, local_rank, tracker_
             print(f"Validation loss at epoch {epoch}: {val_loss.item()}")
             if train_args.tracker:
                 if train_args.tracker == "wandb":
-                    import wandb  # type: ignore
-
                     wandb.log({"validation loss": val_loss.item()}, step=epoch)
                 elif train_args.tracker == "aim":
                     tracker_fn(
@@ -212,6 +293,8 @@ def get_mixed_precision_policy(train_args, rank):
                 print(f"FP16 enabled")
     else:
         mixed_precision_policy = None
+        if rank == 0:
+            print(f"without mixed precision")
 
     return mixed_precision_policy
 
@@ -238,9 +321,10 @@ def get_policies(train_args, rank, block=None):
         print(f"Sharding strategy = {train_args.sharding_strategy}")
 
     # ac handler
+    # 不使用，否则需要配置一些block,param_init_function
     apply_selective_ac = partial(apply_fsdp_checkpointing, block=block)
 
-    # param init function
+    # param init function,避免在cpu上采用过多的内存，需要根据模型修改
     if train_args.low_cpu_fsdp:
         param_init_fn = param_init_function
     else:
@@ -273,8 +357,23 @@ def get_profiler(train_args, rank):
     )
 
 
+# 太多了
+from transformers.models.qwen2_vl.modeling_qwen2_vl import (
+    Qwen2VLSdpaAttention,
+    VisionAttention,
+    VisionMlp,
+    Qwen2MLP,
+)
+from torch.nn import Embedding
+
+WRAP_BLOCKS = (Qwen2VLSdpaAttention, VisionAttention, VisionMlp, Qwen2MLP, Embedding)
+
+
 def get_wrap_block(train_args, rank=0):
-    set_block = set(train_args.set_block)
+    if train_args.wrap_block is None:
+        return None
+    # set_block:List[str]
+    set_block = WRAP_BLOCKS
     if rank == 0:
         print(f"set_block = {set_block}")
     return set_block
