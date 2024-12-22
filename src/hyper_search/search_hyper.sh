@@ -1,7 +1,5 @@
 
-
-
-
+torchrun --nproc_per_node=1 src/hyper_search/optuna_office_fsdp.py 
 
 
 

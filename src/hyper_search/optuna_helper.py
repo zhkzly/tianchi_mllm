@@ -145,6 +145,7 @@ def optuna_main(
                 )
                 for name, param in model.named_parameters():
                     print(f"Parameter {name} has dtype: {param.dtype}")
+                    break
             param_init_fn = None
         # else:
         #     model = LLaMA(llama_config)

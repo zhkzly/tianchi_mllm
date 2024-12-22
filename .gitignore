@@ -176,8 +176,13 @@ cython_debug/
 /huggingface/*
 !/huggingface/.gitkeep
 
-/logs/*
-!/logs/.gitkeep
+/logs/hyper_search/*
+!/logs/hyper_search/.gitkeep
+/logs/tracker/*
+!/logs/tracker/.gitkeep
+/logs/profiler/*
+!/logs/profiler/.gitkeep
+
 
 
 
