@@ -1,18 +1,5 @@
-# user zhengkelong
 
-
-from torch.utils.data import DataLoader
-import numpy as np
-import torch
-import os
-import torch.optim as optim
-import time
-import torch.nn as nn
-import matplotlib as mpl
-import matplotlib.pyplot as plt
 import logging
-from tqdm import tqdm
-from dataclasses import dataclass, field
 from transformers import HfArgumentParser
 from src.hyper_search.configs import (
     ModelArgs,
@@ -21,13 +8,7 @@ from src.hyper_search.configs import (
     DataArgs,
     OptunaArgs,
 )
-from typing import Optional, List
-from torch.utils.tensorboard import SummaryWriter
-import math
-from src.utils.utils import get_optimizer, get_scheduler
 
-from safetensors import safe_open
-from safetensors.torch import save_file
 from src.hyper_search.optuna_helper import optuna_main
 import torch.distributed as dist
 
@@ -125,7 +106,7 @@ class OptunaFSDP:
             )
             print("Study statistics: ")
             print("  Number of finished trials: ", len(self.study.trials))
-            print("  Number of pruned trials: ", len(pruned))
+            print("  Number of pruned trials: ", len(prued))
             print("  Number of complete trials: ", len(complete))
             print("Best trial:")
             trial = self.study.best_trial

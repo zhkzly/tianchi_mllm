@@ -3,20 +3,16 @@ import os
 os.environ["HF_HOME"] = "huggingface"
 from transformers import (
     Qwen2VLForConditionalGeneration,
-    AutoTokenizer,
     AutoProcessor,
-    Qwen2VLProcessor,
 )
 from src.utils.fms_fsdp.utils.dummy_data_utils import CustomDataset, Conversions
-from torch.utils.data import DataLoader
+
 from rich import print
 import logging
-import json
+
 from tqdm import tqdm
-import re
-from src.utils.fms_fsdp.utils.dummy_data_utils import convert_to_json
+
 import math
-from torch.profiler import ProfilerActivity
 import torch
 
 logging.basicConfig(

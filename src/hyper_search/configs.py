@@ -10,7 +10,7 @@ class DataArgs:
 @dataclass
 class TrainArgs:
     # training_config
-    lr: float = 2e-5
+    lr: float = 5e-6
     optimizer: str = "adamw"
     beta1: float = 0.9
     beta2: float = 0.95
@@ -48,7 +48,7 @@ class TrainArgs:
         },
     )
 
-    min_num_params: int = 1e6
+    min_num_params: float = 1e6
 
     sharding_strategy: str = field(
         default="fsdp", metadata={"choices": "['fsdp','hspd','ddp']"}
@@ -88,7 +88,7 @@ class TrainArgs:
     )
 
     grad_clip_thresh: float = field(
-        default=1.0,
+        default=2.0,
         metadata={"help": "the threshold for gradient clipping,default is 1.0"},
     )
     tracker: str = field(
@@ -149,7 +149,7 @@ class TrainArgs:
 @dataclass
 class ModelArgs:
     model_name: str = "Qwen/Qwen2-VL-2B-Instruct"
-    cache_dir = "./huggingface/hub"
+    cache_dir :str= "./huggingface/hub"
 
 
 @dataclass

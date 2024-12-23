@@ -34,7 +34,7 @@ def get_profiler():
         ],
         schedule=torch.profiler.schedule(wait=1, warmup=1, active=2, repeat=1),
         on_trace_ready=torch.profiler.tensorboard_trace_handler(
-            dir_name="log/profiler"
+            dir_name="logs/profiler"
         ),
         profile_memory=True,
         record_shapes=True,
@@ -104,7 +104,7 @@ def main(data_path="datas/train", task_type="0", data_type="train"):
     text_prompt = processor.apply_chat_template(
         conversation, add_generation_prompt=True
     )
-    print(f"the text_prompt:{text_prompt[0:5]}")
+    print(f"the text_prompt:{text_prompt[6:9]}")
     # Excepted output: '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>Describe this image.<|im_end|>\n<|im_start|>assistant\n'
     print(f"chat template process finished")
 

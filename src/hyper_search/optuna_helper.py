@@ -7,10 +7,10 @@ import torch.optim as optim
 # from fms.models.llama import LLaMA, LLaMABlock
 from torch import distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.optim.lr_scheduler import LambdaLR
+# from torch.optim.lr_scheduler import LambdaLR
 from rich import print
 from src.utils.fms_fsdp.utils.checkpointing_utils import Checkpointer
-from src.utils.fms_fsdp.utils.config_utils import get_model_config
+# from src.utils.fms_fsdp.utils.config_utils import get_model_config
 import math
 from src.utils.fms_fsdp.utils.train_utils import (
     get_policies,
@@ -46,9 +46,9 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import StateDictType
 
 import os
-import shutil
+# import shutil
 import time
-from pathlib import Path
+# from pathlib import Path
 
 import torch
 from torch.distributed.checkpoint import (
@@ -352,7 +352,7 @@ def optuna_main(
     else:
         checkpointer.save(model=model, optimizer=optimizer, step=trial.number)
         dist.barrier()
-
+    
     return validate_loss
 
 
