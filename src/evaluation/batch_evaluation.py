@@ -34,9 +34,9 @@ def collate_fn(batch:List[Dict[str, Any]]):
     inputs_image=[instance['image'] for instance in batch]
     data_ids=[instance['id'] for instance in batch]
     # 预测的时候没有label
-    # labels=[instance['output'] for instance in batch]
+    labels=[instance['output'] for instance in batch]
     image_ids=[instance['image_id'] for instance in batch]
-    return inputs_text,inputs_image,data_ids,image_ids
+    return inputs_text,inputs_image,data_ids,image_ids,labels
 
 # 需要保存id，label，pre
 
@@ -68,8 +68,8 @@ def main(data_path="datas/train", task_type="0", data_type="train",device='cuda'
     # print('+++++++++++++++++++++++++++')
     # print(f"the second batch:{data_set[1]}")
     # print('+++++++++++++++++++++++++++')
-    # datas = {"pred": [], "id": [], "image_id": [], "label": [],'origin_output':[]}
-    datas = {"predict": [], "id": [], "image_id": [],'origin_output':[]}
+    datas = {"predict": [], "id": [], "image_id": [], "label": [],'origin_output':[]}
+    # datas = {"predict": [], "id": [], "image_id": [],'origin_output':[]}
     print("starting the data process")
     def resize_image(images, scale=2):
         return_images=[]
@@ -97,7 +97,8 @@ def main(data_path="datas/train", task_type="0", data_type="train",device='cuda'
             return_images.append(image)
         return return_images
     # inputs_text,inputs_image,data_ids,labels,image_ids
-    for inputs_text,inputs_image,data_ids,image_ids in tqdm(test_loader,total=len(test_loader),colour="blue"):
+    model.eval()
+    for inputs_text,inputs_image,data_ids,image_ids,labels in tqdm(test_loader,total=len(test_loader),colour="blue"):
         inputs_image = [resize_image(image) for image in inputs_image]
         # print(f"++++++++++++++++++++++++++++++++")
         # print(f"the inputs_text:{inputs_text[0]}")
@@ -132,7 +133,7 @@ def main(data_path="datas/train", task_type="0", data_type="train",device='cuda'
             datas['origin_output']+=output_text
             datas['predict']+=[convert_to_json(text) for text in output_text]
             datas['id']+=data_ids
-            # datas['label']+=labels
+            datas['label']+=labels
             # [[],[]]
             datas['image_id']+=image_ids
     # for key ,value in datas.items():
@@ -144,9 +145,9 @@ def main(data_path="datas/train", task_type="0", data_type="train",device='cuda'
     df.to_csv(data_save_path,index=False,encoding="utf-8-sig")
 
 if __name__ == "__main__":
-    data_path = "../datas/test1"
+    data_path = "./datas/train"
     task_type = "1"
-    data_type = "train"
+    data_type = "val"
     
     for task_type in ['all']:
         main(data_path=data_path, task_type=task_type, data_type=data_type)

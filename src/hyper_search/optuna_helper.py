@@ -3,7 +3,7 @@ import os
 
 import torch
 import torch.optim as optim
-
+from dataclasses import asdict
 # from fms.models.llama import LLaMA, LLaMABlock
 from torch import distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -128,7 +128,8 @@ def optuna_main(
             #     )
             # model = get_peft_model(
             #     model=model, peft_config=lora_config, adapter_name=peft_args.adapter_name
-            # )
+            # ) 
+            # float32,cpu
             model = get_model(model_args)
             if train_args.use_lora:
                 lora_config = LoraConfig(
@@ -182,6 +183,7 @@ def optuna_main(
         print(f"loading qwen2 processor...")
         print("Datasets constructed!")
     preprocessor = AutoProcessor.from_pretrained(model_args.model_name)
+    # os.path.join(data_args.data_path,data_type, ".json")
     train_dataset = CustomSftDataset(
         preprocessor=preprocessor,
         data_path=data_args.data_path,
@@ -226,7 +228,7 @@ def optuna_main(
         auto_wrap_policy=wrapping_policy,
         mixed_precision=mixed_precision_policy,
         sharding_strategy=sharding_strategy_policy,
-        # 必须和compile同时使用，否则会报错
+        # 必须和compile同时使用，否则会报错,
         use_orig_params=train_args.use_torch_compile,
         device_id=torch.cuda.current_device(),
         limit_all_gathers=True,
@@ -264,7 +266,7 @@ def optuna_main(
 
     # optionally load from checkpoint (when continue pretraining)
     checkpointer = Checkpointer(
-        train_args.ckpt_save_path, 1000, train_args.sharding_strategy, rank, local_rank
+        train_args.ckpt_save_path, train_args.sharding_strategy, rank, local_rank
     )
     # model, optimizer, _, start_step, tokens_seen, is_resuming = checkpointer.load(
     #     model,
@@ -321,9 +323,34 @@ def optuna_main(
         desc=f"traing epochs",
         disable=(rank != 0),
     )
+    if rank==0:
+        if train_args.tracker:
+            tracker_dir = train_args.tracker_dir
+            project_name = train_args.tracker_project_name
+            run_id = f"{trial.number}" if trial else None
 
+            if train_args.tracker == "wandb":
+                try:
+                    import wandb  # type: ignore
+                except ImportError:
+                    raise ImportError("tracker is set to wandb but wandb is not installed.")
+                if rank == 0:
+                    print(f"--> wandb is enabled!")
+                    try:
+                        wandb.init(
+                            project=project_name,
+                            dir=tracker_dir,
+                            resume="allow",
+                            id=run_id,
+                            mode="offline",
+                        )
+                    except wandb.errors.UsageError:
+                        raise ValueError(
+                            "wandb failed to init, did you pass your wandb api key via WANDB_API_KEY?"
+                        )
+                    wandb.config = asdict(train_args)
     for epoch in pbar:
-        train_loss, tracker_fn = train(
+        val_to_track=train(
             train_args,
             model,
             local_rank,
@@ -338,10 +365,10 @@ def optuna_main(
             train_sampler=train_sampler,
             trial=trial,
         )
-
-        trial.report(
-            validate_fn(model, val_loader, local_rank, rank, tracker_fn), epoch
-        )
+        if train_args.tracker:
+            wandb.log(val_to_track,step=epoch)
+        validate_loss=validate_fn(model=model,val_loader=val_loader,train_args=train_args,local_rank=local_rank,rank=rank,epoch=epoch,tracker_fn=wand.log)
+        trial.report(validate_loss, epoch)
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()
     if train_args.save_only_rank0:
@@ -393,13 +420,11 @@ class Checkpointer:
     def __init__(
         self,
         ckpdir,
-        n_to_save,
         parallel_mode,
         rank,
         local_rank,
         model_auto_placement=False,
     ):
-        self.max_ckps = n_to_save
         self.rank = rank
         self.local_rank = local_rank
         self.ckp_path = os.path.join(ckpdir, "checkpoints/")
@@ -416,12 +441,8 @@ class Checkpointer:
     def load(
         self,
         model,
-        optimizer,
-        dataloader,
-        path="",
-        reset_stepcount=False,
-        strict=True,
-        is_compiled=False,
+        optimizer=None,
+        file_name=None,
     ):
         """
         Handle checkpoint loading for model/optimizer/dataloader from given path, according to arguments.
@@ -433,6 +454,7 @@ class Checkpointer:
         """
         model_load_time = time.time()
         # Load model
+        load_path=os.path.join(self.ckp_path, file_name)
         with FSDP.state_dict_type(model, StateDictType.SHARDED_STATE_DICT):
             state_dict = model.state_dict()
             model_ckp = {"model_state": state_dict}
@@ -461,8 +483,9 @@ class Checkpointer:
             )
             optimizer.load_state_dict(flattened_osd)
             self.report(optimizer_load_time=time.time() - optim_load_time)
-
-        return model, optimizer
+            return model, optimizer
+        else:
+            return model
 
     def save(
         self,
@@ -483,8 +506,6 @@ class Checkpointer:
         state_dict = {"model_state": model_state, "optimizer_state": optim_state}
         if self._do_save(rank, self.local_rank):
             self._write(state_dict, model.process_group, save_name, rank)
-        else:
-            self._write(None, dataloader_state, None, save_name, rank)
         if rank == 0:
             metadata = kwargs
             metadata["step"] = step
@@ -505,8 +526,6 @@ class Checkpointer:
                 process_group=process_group,
                 planner=DefaultSavePlanner(),
             )
-        if loader_state is not None:
-            loader_state.save_to_path(save_name)
 
     def save_single_file(
         self,
@@ -538,6 +557,7 @@ class Checkpointer:
 
         return
 
+    # 没有去实现
     def load_single_file(
         self,
         model,

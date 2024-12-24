@@ -184,3 +184,38 @@ class PeftArgs:
     lora_alpha: int = 8
     bias: str = "none"
     adapter_name: str = "sft_qwen_vl"
+
+
+
+@dataclass
+class FsdpEvaluationArgs:
+    data_path:str='../datas/test1'
+    data_type:str='all'
+    cache_dir:str='./huggingface/hub'
+    model_name:str='Qwen/Qwen2-VL-2B-Instruct'
+    wrap_block:str='transformer'
+    wrapper_type:str='transformer'
+    sharding_strategy:str='fsdp'
+    low_cpu_fsdp:bool=True
+    fsdp_activation_checkpointing:bool=True
+    selective_checkpointing:str='1/3'
+    use_torch_compile:bool=True
+    use_profiler:bool=True
+    profiler_rank0_only:bool=True
+    tracker:str='wandb'
+    tracker_dir:str='./logs/tracker'
+    tracker_project_name:str='mllm'
+    use_lora:bool=True
+    shuffle:bool=False
+    num_workers:int=2
+    ckpt_save_path:str='./checkpoints/'
+    finetune:bool=True
+    report_interval:int=100
+    checkpoint_interval:int=1000
+    save_only_rank0:bool=False
+    peft_type:str='lora'
+    lora_alpha:int=8
+    bias:str='none'
+    adapter_name:str='sft_qwen_vl'
+    low_rank:int=8
+    target_modules:List[str]=field(default_factory=lambda: ['q_proj', 'v_proj'])

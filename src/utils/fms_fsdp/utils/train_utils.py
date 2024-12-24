@@ -16,7 +16,7 @@ import torch.distributed as dist
 from torch.distributed.fsdp import ShardingStrategy
 
 from src.utils.fms_fsdp.policies import *
-from torch.amp import GradScaler
+import wandb
 from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
 
 MODEL_OUTPUT_CONFIG = {
@@ -48,47 +48,7 @@ def train(
     start_step=0,
     trial=None,
 ):
-    if train_args.tracker:
-        if train_args.tracker not in ["wandb", "aim"]:
-            raise ValueError(f"tracker {train_args.tracker} not supported.")
-        tracker_dir = train_args.tracker_dir
-        project_name = train_args.tracker_project_name
-        run_id = f"{trial.number}" if trial else None
-
-        if train_args.tracker == "wandb":
-            try:
-                import wandb  # type: ignore
-            except ImportError:
-                raise ImportError("tracker is set to wandb but wandb is not installed.")
-            if rank == 0:
-                print(f"--> wandb is enabled!")
-                try:
-                    wandb.init(
-                        project=project_name,
-                        dir=tracker_dir,
-                        resume="allow",
-                        id=run_id,
-                        mode="offline",
-                    )
-                except wandb.errors.UsageError:
-                    raise ValueError(
-                        "wandb failed to init, did you pass your wandb api key via WANDB_API_KEY?"
-                    )
-                wandb.config = asdict(train_args)
-
-        if train_args.tracker == "aim":
-            try:
-                from aim import Run  # type: ignore
-            except ImportError:
-                raise ImportError("tracker is set to aim but aim is not installed.")
-            if rank == 0:
-                print(f"--> aim is enabled!")
-                run = Run(
-                    experiment=project_name,
-                    repo=tracker_dir,
-                    run_hash=run_id,
-                )
-                run["hparams"] = asdict(train_args)
+    #TODO:这个地方的记录应该是需要考虑在哪里声明
 
     train_sampler.set_epoch(epoch)
     dist.barrier()
@@ -106,7 +66,7 @@ def train(
         )
     else:
         scaler = None
-
+    optimizer.zero_grad()
     # 指定了一个开始的节点
     for batch_idx, (input, label) in enumerate(train_loader, start=start_step + 1):
         if batch_idx > train_args.max_steps:
@@ -114,7 +74,6 @@ def train(
         input = input.to(local_rank)
         label = label.to(local_rank)
         input_dict = merge_dict(MODEL_OUTPUT_CONFIG, input)
-        optimizer.zero_grad()
         if train_args.mixed_precision:
             with autocast:
                 output = model(labels=label, **input_dict)
@@ -132,13 +91,12 @@ def train(
 
             if (batch_idx + 1) % train_args.accumulation_steps == 0:
                 if train_args.clip_grad_norm:
-                    (
-                        ddp_stats[1]
-                        + model.clip_grad_norm_(train_args.grad_clip_thresh).item()
-                    )
+                        ddp_stats[1]+=model.clip_grad_norm_(train_args.grad_clip_thresh).item()
+            
                 scaler.step(optimizer)
                 scaler.update()
                 scheduler.step()
+                optimizer.zero_grad()
         else:
             loss.backward()
             if (batch_idx + 1) % train_args.accumulation_steps == 0:
@@ -146,8 +104,10 @@ def train(
                     ddp_stats[1] += model.clip_grad_norm_(train_args.grad_clip_thresh)
                 optimizer.step()
                 scheduler.step()
+                optimizer.zero_grad()
 
         ddp_stats[0] += loss.item()
+        #TODO: 这里需要修改成为batch_size
         ddp_stats[2] += 1
 
         if profiler:
@@ -159,18 +119,16 @@ def train(
             train_loss = train_args.accumulation_steps * ddp_stats[0] / ddp_stats[2]
             g_norm = ddp_stats[1] / ddp_stats[2]
             elapsed_time = time.time() - loop_start
-            world_size = int(os.environ["WORLD_SIZE"])
             # # 实际上不是token,因为每个的sequence 长度无法确定
             # new_tokens_seen = (
             #     (batch_idx - start_step) * world_size * train_args.batch_size
             # )
             if rank == 0:
-                total_tokens_seen = tokens_seen + new_tokens_seen
                 current_loss = train_loss.item()
                 current_lr = scheduler.get_last_lr()[0]
                 current_gnorm = g_norm.item()
-                current_step_time = (time.time() - start) / train_args.report_interval
-                overall_step_time = elapsed_time / (batch_idx - start_step)
+                # current_step_time = (time.time() - start) / train_args.report_interval
+                # overall_step_time = elapsed_time / (batch_idx - start_step)
                 # current_throughput = int(
                 #     train_args.batch_size * train_args.seq_length / current_step_time
                 # )
@@ -192,7 +150,7 @@ def train(
                 print("gradient norm:", current_gnorm)
                 print("reserved memory:", reserved_mem)
                 print("allocated memory:", allocated_mem)
-                # print("current step time:", current_step_time)
+                print("one epoch time:", time.time() - start)
                 # print("overall step time:", overall_step_time)
                 # print("current token per gpu per sec:", current_throughput)
                 # print("overall token per gpu per sec:", overall_throughput)
@@ -208,12 +166,6 @@ def train(
                         "gpu reserved memory": reserved_mem,
                         "gpu allocated memory": allocated_mem,
                     }
-                    if train_args.tracker == "wandb":
-                        tracker_fn = wandb.log
-                    elif train_args.tracker == "aim":
-                        tracker_fn = run.track
-                    tracker_fn(vals_to_track, step=batch_idx)
-
             start = time.time()
             ddp_stats.zero_()
         torch.cuda.reset_peak_memory_stats(device=torch.cuda.current_device())
@@ -225,7 +177,7 @@ def train(
                 step=trial.number,
             )
 
-    return train_loss, tracker_fn
+    return vals_to_track
 
 
 def validate_fn(model, val_loader, epoch, train_args, rank, local_rank, tracker_fn):
@@ -243,8 +195,8 @@ def validate_fn(model, val_loader, epoch, train_args, rank, local_rank, tracker_
             val_label = val_label.to(local_rank)
             val_input_dict = merge_dict(MODEL_OUTPUT_CONFIG, val_input)
             with autocast:
-                val_output = model(labels=val_label, **val_input)
-            val_output = val_output.loss if hasattr(val_output, "loss") else val_output
+                val_output = model(labels=val_label, **val_input_dict)
+            val_loss = val_output.loss if hasattr(val_output, "loss") else val_output
             val_stats[0] += val_loss.item()
             val_stats[1] += val_input.shape[0]
         dist.reduce(val_stats, dst=0, op=dist.ReduceOp.SUM)
@@ -252,14 +204,9 @@ def validate_fn(model, val_loader, epoch, train_args, rank, local_rank, tracker_
             mean_val_loss = val_stats[0] / val_stats[1]
             print(f"Validation loss at epoch {epoch}: {val_loss.item()}")
             if train_args.tracker:
-                if train_args.tracker == "wandb":
-                    wandb.log({"validation loss": val_loss.item()}, step=epoch)
-                elif train_args.tracker == "aim":
-                    tracker_fn(
-                        {"mean_validation loss": mean_val_loss.item()},
-                        name="validation mean loss",
-                        epoch=epoch,
-                    )
+
+                tracker_fn({"mean_validation loss": mean_val_loss.item()}, step=epoch)
+
         return mean_val_loss.item()
 
 

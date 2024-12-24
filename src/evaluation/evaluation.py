@@ -46,6 +46,7 @@ def main(data_path="datas/train", task_type="0", data_type="train"):
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         "Qwen/Qwen2-VL-2B-Instruct", torch_dtype="auto", device_map="auto"
     )
+    model.eval()
     print(f"the device of model:{model.device}")
     # Qwen2VLForConditionalGeneration
     logger.info(f"the type of model:{type(model)}")

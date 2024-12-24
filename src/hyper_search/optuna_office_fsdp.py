@@ -1,5 +1,4 @@
 
-import logging
 from transformers import HfArgumentParser
 from src.hyper_search.configs import (
     ModelArgs,
@@ -12,10 +11,6 @@ from src.hyper_search.configs import (
 from src.hyper_search.optuna_helper import optuna_main
 import torch.distributed as dist
 
-
-fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s-%(funcName)s-%(lineno)s"
-logging.basicConfig(format=fmt)
-run_logger = logging.getLogger(__name__)
 
 
 # 实现多卡的超参数搜索，并使用 optuna 进行超参数搜索，
@@ -57,13 +52,13 @@ class OptunaFSDP:
             "epochs", 1, self.optuna_args.epochs_max
         )
         self.train_args.optimizer = trial.suggest_categorical(
-            "optimizer", ["adam", "adamw", "sgd"]
+            "optimizer", ["adamw"]
         )
 
         self.train_args.lr_scheduler = trial.suggest_categorical(
-            "lr_scheduler", ["cosine", "step", "cosine_with_warmup"]
+            "lr_scheduler", ["cosine_with_warmup"]
         )
-        self.train_args.batch_size = trial.suggest_int("batch_size", 2, 8, step=2)
+        # self.train_args.batch_size = trial.suggest_int("batch_size", 2, 8, step=2)
         self.peft_args.low_rank = trial.suggest_int(
             "low_rank",
             self.optuna_args.low_rank_min,

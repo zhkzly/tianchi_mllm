@@ -71,46 +71,66 @@ def get_dataloaders(
 ):
     # print(f"the type of train_dataset is {type(train_dataset)}")
     # print(f"the length of train_dataset is {len(train_dataset)}")
-    train_sampler = DistributedSampler(
-        train_dataset,
-        num_replicas=world_size,
-        rank=local_rank,
-        shuffle=shuffle,
-        seed=seed,
-    )
+    if train_dataset is not None:
+        train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=world_size,
+            rank=local_rank,
+            shuffle=shuffle,
+            seed=seed,
+        )
 
-    train_loader = DataLoader(
-        train_dataset,
-        shuffle=not shuffle,
-        pin_memory=True,
-        drop_last=True,
-        batch_size=batch_size,
-        collate_fn=collator,
-        sampler=train_sampler,
-        num_workers=num_workers,
-    )
+        train_loader = DataLoader(
+            train_dataset,
+            shuffle=not shuffle,
+            pin_memory=True,
+            drop_last=True,
+            batch_size=batch_size,
+            collate_fn=collator,
+            sampler=train_sampler,
+            num_workers=num_workers,
+        )
 
-    val_sampler = DistributedSampler(
-        val_dataset,
-        num_replicas=world_size,
-        rank=local_rank,
-        shuffle=shuffle,
-        seed=seed,
-    )
+        val_sampler = DistributedSampler(
+            val_dataset,
+            num_replicas=world_size,
+            rank=local_rank,
+            shuffle=shuffle,
+            seed=seed,
+        )
 
-    val_loader = DataLoader(
-        val_dataset,
-        shuffle=not shuffle,
-        pin_memory=True,
-        drop_last=True,
-        batch_size=batch_size,
-        collate_fn=collator,
-        sampler=val_sampler,
-        num_workers=num_workers,
-    )
+        val_loader = DataLoader(
+            val_dataset,
+            shuffle=not shuffle,
+            pin_memory=True,
+            drop_last=True,
+            batch_size=batch_size,
+            collate_fn=collator,
+            sampler=val_sampler,
+            num_workers=num_workers,
+        )
 
-    return train_sampler, train_loader, val_loader
+        return train_sampler, train_loader, val_loader
+    else:
+        val_sampler = DistributedSampler(
+            val_dataset,
+            num_replicas=world_size,
+            rank=local_rank,
+            shuffle=shuffle,
+            seed=seed,
+        )
 
+        val_loader = DataLoader(
+            val_dataset,
+            shuffle=not shuffle,
+            pin_memory=True,
+            drop_last=True,
+            batch_size=batch_size,
+            collate_fn=collator,
+            sampler=val_sampler,
+            num_workers=num_workers,
+        )
+        return  val_loader
 
 def get_parameter_names(model, forbidden_layer_types):
     result = []
