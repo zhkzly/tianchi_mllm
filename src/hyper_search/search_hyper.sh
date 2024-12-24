@@ -5,6 +5,8 @@
 
 torchrun --nproc_per_node=1 src/hyper_search/optuna_office_fsdp.py \
              --data_path ./datas/train \
+             --data_type train \
+             --task_type 0 \
              --model_name Qwen/Qwen2-VL-2B-Instruct \
              --cache_dir ./huggingface/hub \
              --n_trials 20 \

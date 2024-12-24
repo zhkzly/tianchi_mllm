@@ -5,6 +5,9 @@ from dataclasses import dataclass, field
 @dataclass
 class DataArgs:
     data_path: str = "./datas/train"
+    data_type: str = "train"
+    task_type: str = "all"
+
 
 
 @dataclass
@@ -80,6 +83,10 @@ class TrainArgs:
     use_profiler: bool = field(
         default=True,
         metadata={"help": "whether to use profiler,default is False"},
+    )
+    profile_traces:str = field(
+        default="./logs/profiler",
+        metadata={"help": "the type of profile traces,default is 'default'"},
     )
 
     profiler_rank0_only: bool = field(
@@ -189,33 +196,45 @@ class PeftArgs:
 
 @dataclass
 class FsdpEvaluationArgs:
-    data_path:str='../datas/test1'
-    data_type:str='all'
-    cache_dir:str='./huggingface/hub'
-    model_name:str='Qwen/Qwen2-VL-2B-Instruct'
-    wrap_block:str='transformer'
-    wrapper_type:str='transformer'
-    sharding_strategy:str='fsdp'
-    low_cpu_fsdp:bool=True
-    fsdp_activation_checkpointing:bool=True
-    selective_checkpointing:str='1/3'
-    use_torch_compile:bool=True
-    use_profiler:bool=True
-    profiler_rank0_only:bool=True
-    tracker:str='wandb'
-    tracker_dir:str='./logs/tracker'
-    tracker_project_name:str='mllm'
-    use_lora:bool=True
-    shuffle:bool=False
-    num_workers:int=2
+    wrap_block:str = "transformer"
+    mixed_precision:bool = True
+    wrapper_type:str = "transformer"
+    sharding_strategy:str = "fsdp"
+    low_cpu_fsdp:bool = True
+    fsdp_activation_checkpointing:bool = True
+    selective_checkpointing:str = "1/3"
+    use_torch_compile:bool = True
+
+    tracker:str = "wandb"
+    tracker_dir:str = "./logs/tracker"
+    tracker_project_name:str = "mllm"
+    
+    model_name:str = "Qwen/Qwen2-VL-2B-Instruct"
+    cache_dir :str= "./huggingface/hub"
+    
+    data_path:str = "./datas/test"
+    task_type:str = "all"
+    data_type:str = "test"
+    
+    shuffle:bool = False
+    seed:int = 567
+    batch_size:int = 1
+    num_workers:int = 2
+    
+
+    use_profiler:bool = True
+    profile_traces:str = "./logs/profiler"
+    
+    use_lora:bool = True
+    low_rank:int = 8
+    target_modules:List[str] = field(default_factory=lambda: ["q_proj", "v_proj"])
+    peft_type:str = "lora"
+    lora_alpha:int = 8
+    bias:str = "none"
+    adapter_name:str = "sft_qwen_vl"
+    
     ckpt_save_path:str='./checkpoints/'
-    finetune:bool=True
-    report_interval:int=100
-    checkpoint_interval:int=1000
-    save_only_rank0:bool=False
-    peft_type:str='lora'
-    lora_alpha:int=8
-    bias:str='none'
-    adapter_name:str='sft_qwen_vl'
-    low_rank:int=8
-    target_modules:List[str]=field(default_factory=lambda: ['q_proj', 'v_proj'])
+    load_file_name:str = "best.ckpt"
+    profiler_rank0_only:bool = True
+    
+    sft:bool = True

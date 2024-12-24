@@ -187,8 +187,8 @@ def optuna_main(
     train_dataset = CustomSftDataset(
         preprocessor=preprocessor,
         data_path=data_args.data_path,
-        data_type="train",
-        task_type="all",
+        data_type=data_args.data_type,
+        task_type=data_args.task_type,
     )
     val_dataset = CustomSftDataset(
         preprocessor=preprocessor,
@@ -367,7 +367,8 @@ def optuna_main(
         )
         if train_args.tracker:
             wandb.log(val_to_track,step=epoch)
-        validate_loss=validate_fn(model=model,val_loader=val_loader,train_args=train_args,local_rank=local_rank,rank=rank,epoch=epoch,tracker_fn=wand.log)
+        # epoch=0
+        validate_loss=validate_fn(model=model,val_loader=val_loader,train_args=train_args,local_rank=local_rank,rank=rank,epoch=epoch,tracker_fn=wandb.log)
         trial.report(validate_loss, epoch)
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()

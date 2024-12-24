@@ -170,7 +170,7 @@ def train(
             ddp_stats.zero_()
         torch.cuda.reset_peak_memory_stats(device=torch.cuda.current_device())
 
-        if batch_idx % train_args.checkpoint_interval == 0:
+        if (batch_idx+1) % train_args.checkpoint_interval == 0:
             checkpointer.save(
                 model=model,
                 optimizer=optimizer,
@@ -194,8 +194,8 @@ def validate_fn(model, val_loader, epoch, train_args, rank, local_rank, tracker_
             val_input = val_input.to(local_rank)
             val_label = val_label.to(local_rank)
             val_input_dict = merge_dict(MODEL_OUTPUT_CONFIG, val_input)
-            with autocast:
-                val_output = model(labels=val_label, **val_input_dict)
+            # with autocast:
+            val_output = model(labels=val_label, **val_input_dict)
             val_loss = val_output.loss if hasattr(val_output, "loss") else val_output
             val_stats[0] += val_loss.item()
             val_stats[1] += val_input.shape[0]
@@ -297,7 +297,7 @@ def get_profiler(train_args, rank):
             torch.profiler.ProfilerActivity.CUDA,
         ],
         schedule=torch.profiler.schedule(wait=1, warmup=2, active=3, repeat=1),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler("profile_traces"),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(train_args.profile_traces),
         profile_memory=True,
         with_stack=False,
         record_shapes=True,

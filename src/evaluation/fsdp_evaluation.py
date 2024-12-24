@@ -4,15 +4,14 @@
 
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 import torch.distributed as dist 
-from dataclasses import dataclass
-from typing import List, Tuple, Dict, Union
+
 import torch
 import os
-import transformers
+
 from peft import get_peft_model, LoraConfig
 
 from src.utils.fms_fsdp.utils.dummy_dataloader import get_dataloaders
-from src.utils.fms_fsdp.utils.dummy_datasets import CustomSftDataset, DataSftCollator
+from src.utils.fms_fsdp.utils.dummy_datasets import CustomSftDataset
 
 from transformers import AutoProcessor,Qwen2VLForConditionalGeneration
 from tqdm import tqdm
@@ -20,10 +19,8 @@ from src.utils.fms_fsdp.utils.dummy_data_utils import convert_to_json
 from src.utils.fms_fsdp.utils.train_utils import (
     get_policies,
     get_profiler,
-    setup,
     setup_environ_flags,
     get_wrap_block,
-    validate_fn,
 )
 from src.hyper_search.optuna_helper import Checkpointer
 from src.evaluation.batch_evaluation import collate_fn
@@ -31,12 +28,6 @@ import math
 from src.hyper_search.configs import FsdpEvaluationArgs
 
 
-@dataclass
-class FsdpEvaluationArgs:
-    data_path:str='../datas/test1'
-    data_type:str='all'
-    cache_dir:str='./huggingface/hub'
-    model_name:str='Qwen/Qwen2-VL-2B-Instruct'
 
 
 class FsdpEvaluation:
@@ -78,14 +69,14 @@ class FsdpEvaluation:
                         print('Loading model...')
                         print(f"the loading config of model is {self.evaluation_args.model_name}")
                         model=Qwen2VLForConditionalGeneration.from_pretrained(self.evaluation_args.model_name,cache_dir=self.evaluation_args.cache_dir,
-                                                                            torch_dtype=self.evaluation_args.dtype,device_map=self.evaluation_args.device)
+                                                                            torch_dtype=torch.float32,device_map='cpu')
                         for param in model.parameters():
                             param.requires_grad = False
                         param_init_fn=None
             else:
                 with torch.device("meta"):
                     model=Qwen2VLForConditionalGeneration.from_pretrained(self.evaluation_args.model_name,cache_dir=self.evaluation_args.cache_dir,
-                                                                                            torch_dtype=self.evaluation_args.dtype,device_map=self.evaluation_args.device)
+                                                                                            torch_dtype=torch.float32)
                     for param in model.parameters():
                         param.requires_grad = False
                 def param_init_fn(module):
@@ -107,8 +98,8 @@ class FsdpEvaluation:
         val_dataset = CustomSftDataset(
             preprocessor=processor,
             data_path=self.evaluation_args.data_path,
-            data_type="test",
-            task_type="all",
+            data_type=self.evaluation_args.data_type,
+            task_type=self.evaluation_args.task_type,
         )
         val_loader = get_dataloaders(
             None,
@@ -171,13 +162,14 @@ class FsdpEvaluation:
             colour="blue",
             desc=f"evaluation epochs",
             disable=(rank != 0),
-            colour="blue",
         )
-        
+        model.eval()
         if rank == 0:
-            datas = {"predict": [], "id": [], "image_id": [],'origin_output':[]}
+            # datas = {"predict": [], "id": [], "image_id": [],'origin_output':[]}
+            datas={"predict": [], "id": [], "image_id": [],'label':[],'origin_output':[],'label':[]}
             print("starting the data process")
-        for inputs_text,inputs_image,data_ids,image_ids in pbar:
+        # for inputs_text,inputs_image,data_ids,image_ids in pbar:
+        for inputs_text,inputs_image,data_ids,image_ids ,labels in pbar:
             inputs_image = [self._resize_image(image) for image in inputs_image]
             # print(f"++++++++++++++++++++++++++++++++")
             # print(f"the inputs_text:{inputs_text[0]}")
@@ -185,6 +177,7 @@ class FsdpEvaluation:
             # print(f"the inputs image size:{inputs_image[0][0].size}")
             post_process_data = processor(text=inputs_text,images= inputs_image,padding=True, return_tensors="pt")
             # print(f"the data_ids:{image_ids}")
+            post_process_data=post_process_data.to(torch.cuda.current_device())
             with torch.no_grad():
                 output=model.generate(
                     **post_process_data,
@@ -203,7 +196,7 @@ class FsdpEvaluation:
                     datas['origin_output']+=output_text
                     datas['predict']+=[convert_to_json(text) for text in output_text]
                     datas['id']+=data_ids
-                # datas['label']+=labels
+                datas['label']+=labels
                 # [[],[]]
                 datas['image_id']+=image_ids
             if profiler is not None:
@@ -216,7 +209,7 @@ class FsdpEvaluation:
             df.to_csv(data_save_path,index=False,encoding="utf-8-sig")
             print(f"successfully saved the data to {data_save_path}")
             from src.evaluation.convert2submit import convert2submit
-            convert2submit(data_save_path,self.evaluation_args.data_path)
+            convert2submit(self.evaluation_args.data_path,file_name=os.path.basename(data_save_path))
             print(f"successfully convert the data to submit format")
         dist.destroy_process_group()
         return None
@@ -250,7 +243,7 @@ class FsdpEvaluation:
                         print('Loading model...')
                         print(f"the loading config of model is {self.evaluation_args.model_name}")
                         model=Qwen2VLForConditionalGeneration.from_pretrained(self.evaluation_args.model_name,cache_dir=self.evaluation_args.cache_dir,
-                                                                            torch_dtype=self.evaluation_args.dtype,device_map=self.evaluation_args.device)
+                                                                            torch_dtype=torch.float32,device_map='cpu')
                         lora_config = LoraConfig(
                             r=self.evaluation_args.low_rank,
                             target_modules=self.evaluation_args.target_modules,
@@ -267,7 +260,7 @@ class FsdpEvaluation:
             else:
                 with torch.device("meta"):
                     self.model=Qwen2VLForConditionalGeneration.from_pretrained(self.evaluation_args.model_name,cache_dir=self.evaluation_args.cache_dir,
-                                                                                            torch_dtype=self.evaluation_args.dtype,device_map=self.evaluation_args.device)
+                                                                                            torch_dtype=torch.float32)
                     lora_config = LoraConfig(
                         r=self.evaluation_args.low_rank,
                         target_modules=self.evaluation_args.target_modules,
@@ -300,8 +293,8 @@ class FsdpEvaluation:
         val_dataset = CustomSftDataset(
             preprocessor=processor,
             data_path=self.evaluation_args.data_path,
-            data_type="test",
-            task_type="all",
+            data_type=self.evaluation_args.data_type,
+            task_type=self.evaluation_args.task_type,
         )
         val_loader = get_dataloaders(
             None,
@@ -358,9 +351,9 @@ class FsdpEvaluation:
         
         # optionally load from checkpoint (when continue pretraining)
         checkpointer = Checkpointer(
-            self.evaluation_args.ckpt_save_path, 1000, self.evaluation_args.sharding_strategy, rank, local_rank)
+            self.evaluation_args.ckpt_save_path, self.evaluation_args.sharding_strategy, rank, local_rank)
         
-        checkpointer.load(model=model, optimizer=None, file_name='ckpt_latest.pt',lr_scheduler=None)
+        checkpointer.load(model=model, optimizer=None, file_name=self.evaluation_args.load_file_name,lr_scheduler=None)
 
 
         # profiler
@@ -372,19 +365,20 @@ class FsdpEvaluation:
             colour="blue",
             desc=f"evaluation epochs",
             disable=(rank != 0),
-            colour="blue",
         )
         
         if rank == 0:
-            datas = {"predict": [], "id": [], "image_id": [],'origin_output':[]}
+            # datas = {"predict": [], "id": [], "image_id": [],'origin_output':[]}
+            datas={"predict": [], "id": [], "image_id": [],'origin_output':[],'label':[]}
             print("starting the data process")
-        for inputs_text,inputs_image,data_ids,image_ids in pbar:
+        for inputs_text,inputs_image,data_ids,image_ids ,labels in pbar:
             inputs_image = [self._resize_image(image) for image in inputs_image]
             # print(f"++++++++++++++++++++++++++++++++")
             # print(f"the inputs_text:{inputs_text[0]}")
             # print(f"the inputs_image_id:{data_ids[0]}")
             # print(f"the inputs image size:{inputs_image[0][0].size}")
             post_process_data = processor(text=inputs_text,images= inputs_image,padding=True, return_tensors="pt")
+            post_process_data=post_process_data.to(torch.cuda.current_device())
             # print(f"the data_ids:{image_ids}")
             with torch.no_grad():
                 output=model.generate(
@@ -406,6 +400,8 @@ class FsdpEvaluation:
                     datas['origin_output']+=output_text
                     datas['predict']+=[convert_to_json(text) for text in output_text]
                     datas['id']+=data_ids
+                    # 产生submit 的时候应注释掉下面一行
+                    datas['label']+=labels
                 if profiler is not None:
                     profiler.step()
                 # datas['label']+=labels
@@ -422,7 +418,7 @@ class FsdpEvaluation:
             df.to_csv(data_save_path,index=False,encoding="utf-8-sig")
             print(f"successfully saved the data to {data_save_path}")
             from src.evaluation.convert2submit import convert2submit
-            convert2submit(data_save_path,self.evaluation_args.data_path)
+            convert2submit(self.evaluation_args.data_path,file_name=os.path.basename(data_save_path))
             print(f"successfully convert the data to submit format")
         dist.destroy_process_group()
         return None
@@ -454,8 +450,15 @@ class FsdpEvaluation:
         return return_images
 
 
-
-
+from transformers import HfArgumentParser
+if __name__ == "__main__":
+    eval_parser = HfArgumentParser(FsdpEvaluationArgs)
+    evaluation_args = eval_parser.parse_args_into_dataclasses()[0]
+    evaluater=FsdpEvaluation(evaluation_args)
+    if evaluation_args.sft:
+        evaluater.evaluate_sft_model()
+    else:
+        evaluater.evaluate_pretrain_model()
 
 
 

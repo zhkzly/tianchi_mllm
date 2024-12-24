@@ -1,0 +1,34 @@
+
+torchrun --nproc_per_node=1 ./src/evaluation/fsdp_evaluation.py \
+    --data_path ./datas/train \
+    --task_type 0 \
+    --data_type test \
+    --model_name Qwen/Qwen2-VL-2B-Instruct \
+    --cache_dir ./huggingface/hub \
+    --ckpt_save_path ./checkpoints/ \
+    --load_file_name best.ckpt \
+    --batch_size 1 \
+    --num_workers 2 \
+    --mixed_precision \
+    --wrapper_type transformer \
+    --sharding_strategy fsdp \
+    --low_cpu_fsdp \
+    --fsdp_activation_checkpointing \
+    --selective_checkpointing 1/3 \
+    --use_torch_compile \
+    --use_profiler \
+    --profile_traces ./logs/profiler \
+    --use_lora \
+    --low_rank 8 \
+    --target_modules q_proj,v_proj \
+    --peft_type lora \
+    --lora_alpha 8 \
+    --bias none \
+    --adapter_name sft_qwen_vl \
+    --shuffle True\
+    --seed 567\
+    --tracker wandb\
+    --tracker_dir ./logs/tracker\
+    --tracker_project_name mllm\
+    --profiler_rank0_only True
+    --sft True
