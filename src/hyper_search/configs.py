@@ -150,6 +150,10 @@ class TrainArgs:
         default=False,
         metadata={"help": "whether to save only on rank0,default is True"},
     )
+    device_map:str = field(
+        default="cpu",
+        metadata={"help": "the device map for fsdp"},
+    )
 
 
 # 采用 typing 中的，必须添加 List[int]

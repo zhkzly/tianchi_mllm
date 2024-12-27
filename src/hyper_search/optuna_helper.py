@@ -152,8 +152,9 @@ def optuna_main(
         #     model = LLaMA(llama_config)
         #     model.reset_parameters()
         else:
+            model_args.device_map = "auto"
             with torch.device("meta"):
-                model = get_model(model_args.model_name)
+                model = get_model(model_args)
                 lora_config = LoraConfig(
                     r=peft_args.low_rank,
                     target_modules=peft_args.target_modules,
