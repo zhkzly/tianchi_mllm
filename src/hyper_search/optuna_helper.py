@@ -118,65 +118,39 @@ def optuna_main(
     # get fms model
     # llama_config = get_model_config(model_args.model_name)
     if train_args.low_cpu_fsdp:
-        if rank == 0:
-            print(f"--> using Lora for low cpu fsdp and low rank...")
-            # 这里会遇到加载的问题，微调模型，所以就必须保留原始的参数，而meta设备上的虽然分片，减少内存占用
-            # 但是meta上的参数都是被随机化的，无法保留自己想要的
-            # with torch.device("meta"):
-            #     model = get_model(model_args.model_name)
-            #     lora_config = LoraConfig(
-            #         r=peft_args.low_rank,
-            #         target_modules=peft_args.target_modules,
-            #         peft_type=peft_args.task_type,
-            #         lora_alpha=peft_args.lora_alpha,
-            #         bias=peft_args.bias,
-            #     )
-            # model = get_peft_model(
-            #     model=model, peft_config=lora_config, adapter_name=peft_args.adapter_name
-            # )
-            # float32,cpu
-            model = get_model(model_args)
-            if train_args.use_lora:
-                lora_config = LoraConfig(
-                    r=peft_args.low_rank,
-                    target_modules=peft_args.target_modules,
-                    peft_type=peft_args.peft_type,
-                    lora_alpha=peft_args.lora_alpha,
-                    bias=peft_args.bias,
-                )
-                model = get_peft_model(
-                    model=model,
-                    peft_config=lora_config,
-                    adapter_name=peft_args.adapter_name,
-                )
-                for name, param in model.named_parameters():
-                    print(f"Parameter {name} has dtype: {param.dtype}")
-                    break
-            param_init_fn = None
-        # else:
-        #     model = LLaMA(llama_config)
-        #     model.reset_parameters()
-        else:
-            model_args.device_map = "auto"
-            with torch.device("meta"):
-                model = get_model(model_args)
-                lora_config = LoraConfig(
-                    r=peft_args.low_rank,
-                    target_modules=peft_args.target_modules,
-                    peft_type=peft_args.peft_type,
-                    lora_alpha=peft_args.lora_alpha,
-                    bias=peft_args.bias,
-                )
-                model = get_peft_model(
-                    model=model,
-                    peft_config=lora_config,
-                    adapter_name=peft_args.adapter_name,
-                )
-
-            def param_init_fn(module):
-                return module.to_empty(
-                    device=torch.cuda.current_device(), recurse=False
-                )
+        print(f"--> using Lora for low cpu fsdp and low rank...")
+        # 这里会遇到加载的问题，微调模型，所以就必须保留原始的参数，而meta设备上的虽然分片，减少内存占用
+        # 但是meta上的参数都是被随机化的，无法保留自己想要的
+        # with torch.device("meta"):
+        #     model = get_model(model_args.model_name)
+        #     lora_config = LoraConfig(
+        #         r=peft_args.low_rank,
+        #         target_modules=peft_args.target_modules,
+        #         peft_type=peft_args.task_type,
+        #         lora_alpha=peft_args.lora_alpha,
+        #         bias=peft_args.bias,
+        #     )
+        # model = get_peft_model(
+        #     model=model, peft_config=lora_config, adapter_name=peft_args.adapter_name
+        # )
+        # float32,cpu
+        model = get_model(model_args)
+        if train_args.use_lora:
+            lora_config = LoraConfig(
+                r=peft_args.low_rank,
+                target_modules=peft_args.target_modules,
+                peft_type=peft_args.peft_type,
+                lora_alpha=peft_args.lora_alpha,
+                bias=peft_args.bias,
+            )
+            model = get_peft_model(
+                model=model,
+                peft_config=lora_config,
+                adapter_name=peft_args.adapter_name,
+            )
+            for name, param in model.named_parameters():
+                print(f"Parameter {name} has dtype: {param.dtype}")
+                break
 
     if rank == 0:
         total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -238,14 +212,9 @@ def optuna_main(
         use_orig_params=train_args.use_torch_compile,
         device_id=torch.cuda.current_device(),
         limit_all_gathers=True,
-        param_init_fn=param_init_fn,
-        sync_module_states=True,
+        param_init_fn=None,
+        sync_module_states=False,
     )
-    # we need this post-fsdp call to avoid graph break with torch.compile, until we figure out a better solution.
-    # model.rot_emb.compute_freqs_cis(
-    #     torch.device("cuda", torch.cuda.current_device()),
-    #     model.config.max_expected_seq_len,
-    # )
 
     # fsdp activation checkpointing
     if train_args.fsdp_activation_checkpointing:
@@ -254,12 +223,12 @@ def optuna_main(
         apply_selective_ac(model, p=train_args.selective_checkpointing)
 
     # torch compile
-    if train_args.use_torch_compile:
-        if rank == 0:
-            print(f"--> enabling torch compile...")
-        # the default accumulated_cache_size_limit=64 is not enough for 70b model, so we make it 128 here
-        torch._dynamo.config.accumulated_cache_size_limit = 128
-        model = torch.compile(model)
+    # if train_args.use_torch_compile:
+    #     if rank == 0:
+    #         print(f"--> enabling torch compile...")
+    #     # the default accumulated_cache_size_limit=64 is not enough for 70b model, so we make it 128 here
+    #     torch._dynamo.config.accumulated_cache_size_limit = 128
+    #     model = torch.compile(model)
 
     # Optimizer
     # optimizer = optim.AdamW(
@@ -274,41 +243,6 @@ def optuna_main(
     checkpointer = Checkpointer(
         train_args.ckpt_save_path, train_args.sharding_strategy, rank, local_rank
     )
-    # model, optimizer, _, start_step, tokens_seen, is_resuming = checkpointer.load(
-    #     model,
-    #     optimizer,
-    #     None,
-    #     path=(
-    #         os.path.join(train_args.ckpt_load_path, "checkpoints/")
-    #         if not os.path.isfile(train_args.ckpt_load_path)
-    #         else train_args.ckpt_load_path
-    #     ),
-    #     strict=False,
-    # )
-    # if not is_resuming:
-    #     start_step = 0
-    #     # Override loaded optim hyperparams with the current values
-    #     for g in optimizer.param_groups:
-    #         g["initial_lr"] = train_args.learning_rate
-
-    # # LR schedule
-    # if train_args.training_stage == "annealing":
-    #     schedule = lambda x: 1 - x / train_args.num_steps
-    # else:
-    #     warmup_interval = min(2000, train_args.num_steps // 20)
-    #     schedule = lambda x: min(
-    #         1 - (1 - min(x, warmup_interval) / warmup_interval) ** 2,
-    #         0.1
-    #         + 0.5
-    #         * (1 - 0.1)
-    #         * (
-    #             1
-    #             + math.cos(
-    #                 min(x, train_args.num_steps) / train_args.num_steps * math.pi
-    #             )
-    #         ),
-    #     )
-    # scheduler = LambdaLR(optimizer, lambda x: schedule(x + start_step))
 
     scheduler = get_scheduler(optimizer, train_args)
 
@@ -318,10 +252,7 @@ def optuna_main(
     # Train
     if rank == 0:
         print(f"Training for {train_args.num_steps} steps...")
-    # if rank==0:
-    #     pbar=tqdm(range(train_args.epochs),total=train_args.epochs,desc="trianing epochs----")
-    # else:
-    #     pbar=range(train_args.epochs)
+
     pbar = tqdm(
         range(train_args.epochs),
         total=train_args.epochs,

@@ -150,10 +150,7 @@ class TrainArgs:
         default=False,
         metadata={"help": "whether to save only on rank0,default is True"},
     )
-    device_map:str = field(
-        default="cpu",
-        metadata={"help": "the device map for fsdp"},
-    )
+
 
 
 # 采用 typing 中的，必须添加 List[int]
@@ -161,7 +158,10 @@ class TrainArgs:
 class ModelArgs:
     model_name: str = "Qwen/Qwen2-VL-2B-Instruct"
     cache_dir :str= "./huggingface/hub"
-
+    device_map:str = field(
+        default="cpu",
+        metadata={"help": "the device map for fsdp"},
+    )
 
 @dataclass
 class OptunaArgs:
@@ -207,29 +207,29 @@ class FsdpEvaluationArgs:
     low_cpu_fsdp:bool = True
     fsdp_activation_checkpointing:bool = True
     selective_checkpointing:str = "1/3"
-    use_torch_compile:bool = True
+    use_torch_compile:bool = False
 
     tracker:str = "wandb"
     tracker_dir:str = "./logs/tracker"
     tracker_project_name:str = "mllm"
     
     model_name:str = "Qwen/Qwen2-VL-2B-Instruct"
-    cache_dir :str= "./huggingface/hub"
+    cache_dir :str= "/gemini/pretrain/hub"
     
-    data_path:str = "./datas/test"
+    data_path:str = "./datas/train"
     task_type:str = "all"
-    data_type:str = "test"
-    
-    shuffle:bool = False
+    data_type:str = "train"
+    # shuffle 和 sampler 不能同时为真
+    shuffle:bool = True
     seed:int = 567
     batch_size:int = 1
     num_workers:int = 2
     
 
-    use_profiler:bool = True
+    use_profiler:bool = False
     profile_traces:str = "./logs/profiler"
     
-    use_lora:bool = True
+    use_lora:bool = False
     low_rank:int = 8
     target_modules:List[str] = field(default_factory=lambda: ["q_proj", "v_proj"])
     peft_type:str = "lora"
@@ -241,4 +241,5 @@ class FsdpEvaluationArgs:
     load_file_name:str = "best.ckpt"
     profiler_rank0_only:bool = True
     
-    sft:bool = True
+    sft:bool = False
+    local_rank:int=0

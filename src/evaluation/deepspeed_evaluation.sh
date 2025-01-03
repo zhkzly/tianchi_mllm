@@ -1,10 +1,10 @@
 
-torchrun --nproc_per_node=2 ./src/evaluation/fsdp_evaluation.py \
-    --data_path ./datas/train \
+deepspeed --num_gpus=2 ./src/evaluation/deepspeed_evaluation.py \
+    --data_path ../datas/test1 \
     --task_type all \
-    --data_type test \
-    --model_name Qwen/Qwen2-VL-2B-Instruct \
-    --cache_dir ./huggingface/hub \
+    --data_type train \
+    --model_name Qwen/Qwen2-VL-7B-Instruct \
+    --cache_dir /gemini/pretrain/hub \
     --ckpt_save_path ./checkpoints/ \
     --load_file_name best.ckpt \
     --batch_size 1 \
