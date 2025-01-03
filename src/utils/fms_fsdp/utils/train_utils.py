@@ -16,9 +16,8 @@ import torch.distributed as dist
 from torch.distributed.fsdp import ShardingStrategy
 
 from src.utils.fms_fsdp.policies import *
-import wandb
-from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
 
+from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
 MODEL_OUTPUT_CONFIG = {
     "use_cache": False,
     "return_dict": True,
@@ -48,7 +47,7 @@ def train(
     start_step=0,
     trial=None,
 ):
-    #TODO:这个地方的记录应该是需要考虑在哪里声明
+    # TODO:这个地方的记录应该是需要考虑在哪里声明
 
     train_sampler.set_epoch(epoch)
     dist.barrier()
@@ -71,6 +70,9 @@ def train(
     for batch_idx, (input, label) in enumerate(train_loader, start=start_step + 1):
         if batch_idx > train_args.max_steps:
             break
+        if rank == 0:
+            print(f"the shape of input is {input['input_ids'].shape}")
+            print(f"the shape of label is {label.shape}")
         input = input.to(local_rank)
         label = label.to(local_rank)
         input_dict = merge_dict(MODEL_OUTPUT_CONFIG, input)
@@ -91,8 +93,10 @@ def train(
 
             if (batch_idx + 1) % train_args.accumulation_steps == 0:
                 if train_args.clip_grad_norm:
-                        ddp_stats[1]+=model.clip_grad_norm_(train_args.grad_clip_thresh).item()
-            
+                    ddp_stats[1] += model.clip_grad_norm_(
+                        train_args.grad_clip_thresh
+                    ).item()
+
                 scaler.step(optimizer)
                 scaler.update()
                 scheduler.step()
@@ -107,7 +111,7 @@ def train(
                 optimizer.zero_grad()
 
         ddp_stats[0] += loss.item()
-        #TODO: 这里需要修改成为batch_size
+        # TODO: 这里需要修改成为batch_size
         ddp_stats[2] += 1
 
         if profiler:
@@ -127,14 +131,7 @@ def train(
                 current_loss = train_loss.item()
                 current_lr = scheduler.get_last_lr()[0]
                 current_gnorm = g_norm.item()
-                # current_step_time = (time.time() - start) / train_args.report_interval
-                # overall_step_time = elapsed_time / (batch_idx - start_step)
-                # current_throughput = int(
-                #     train_args.batch_size * train_args.seq_length / current_step_time
-                # )
-                # overall_throughput = int(
-                #     train_args.batch_size * train_args.seq_length / overall_step_time
-                # )
+
                 reserved_mem = torch.cuda.max_memory_reserved(
                     device=torch.cuda.current_device()
                 )
@@ -151,13 +148,7 @@ def train(
                 print("reserved memory:", reserved_mem)
                 print("allocated memory:", allocated_mem)
                 print("one epoch time:", time.time() - start)
-                # print("overall step time:", overall_step_time)
-                # print("current token per gpu per sec:", current_throughput)
-                # print("overall token per gpu per sec:", overall_throughput)
-                # print(
-                #     "overall token per day:",
-                #     int(new_tokens_seen / elapsed_time * 3600 * 24),
-                # )
+
                 if train_args.tracker:
                     vals_to_track = {
                         "learning rate": current_lr,
@@ -170,7 +161,7 @@ def train(
             ddp_stats.zero_()
         torch.cuda.reset_peak_memory_stats(device=torch.cuda.current_device())
 
-        if (batch_idx+1) % train_args.checkpoint_interval == 0:
+        if (batch_idx + 1) % train_args.checkpoint_interval == 0:
             checkpointer.save(
                 model=model,
                 optimizer=optimizer,
@@ -297,7 +288,9 @@ def get_profiler(train_args, rank):
             torch.profiler.ProfilerActivity.CUDA,
         ],
         schedule=torch.profiler.schedule(wait=1, warmup=2, active=3, repeat=1),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler(train_args.profile_traces),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(
+            train_args.profile_traces
+        ),
         profile_memory=True,
         with_stack=False,
         record_shapes=True,
